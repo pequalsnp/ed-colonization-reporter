@@ -36,6 +36,11 @@ type Config struct {
 	// specific commander name, ignoring the one parsed from the journal.
 	// Empty (default) means "use the journal value".
 	CommanderOverride string `toml:"commander_override"`
+	// ReplaySession causes the tailer to start from the beginning of the
+	// most recent journal file on startup instead of seeking to end. Useful
+	// after a restart mid-session so we re-report depot states the game
+	// has already logged. Defaults to false.
+	ReplaySession bool `toml:"replay_session"`
 }
 
 // Default returns a Config with the canonical defaults filled in. The defaults

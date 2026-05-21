@@ -25,6 +25,8 @@ type APIClient interface {
 	UpdateProject(ctx context.Context, update ravencolonial.ProjectUpdate) error
 	CompleteProject(ctx context.Context, buildID string) error
 	Contribute(ctx context.Context, buildID, cmdr string, contrib ravencolonial.Contribution) error
+	PutFleetCarrier(ctx context.Context, fc ravencolonial.FleetCarrier) error
+	OverwriteCarrierCargo(ctx context.Context, marketID int64, cargo ravencolonial.Cargo) error
 }
 
 // Status is a user-visible status update emitted by the reporter.
@@ -65,10 +67,17 @@ func (l Level) String() string {
 type Reporter struct {
 	API     APIClient
 	Session *state.Session
+	// JournalDir lets the reporter read sibling files like Market.json on
+	// EventMarket. May be empty, in which case FC cargo sync is skipped.
+	JournalDir string
 	// Now is injected for tests; production leaves it nil and time.Now is used.
 	Now func() time.Time
 	// onStatus, if set, receives every status update. The UI subscribes here.
 	onStatus func(Status)
+
+	// readMarketFile is overridable for tests. Production leaves it nil and
+	// the package-default implementation reads from JournalDir.
+	readMarketFile func(dir string) (*journal.MarketFile, error)
 }
 
 // New constructs a Reporter.
@@ -113,7 +122,7 @@ func (r *Reporter) HandleEvent(ctx context.Context, raw journal.Raw) error {
 		if e.Commander != "" {
 			r.Session.SetCommander(e.Commander, e.FID)
 		}
-	case journal.EventLocation, journal.EventFSDJump, journal.EventCarrierJump:
+	case journal.EventLocation, journal.EventFSDJump:
 		var e journal.LocationLikeEvent
 		if err := json.Unmarshal(raw.Payload, &e); err != nil {
 			return fmt.Errorf("%s: %w", raw.Event, err)
@@ -142,8 +151,132 @@ func (r *Reporter) HandleEvent(ctx context.Context, raw journal.Raw) error {
 			return fmt.Errorf("contribution: %w", err)
 		}
 		return r.handleContribution(ctx, e)
+	case journal.EventCarrierStats:
+		var e journal.CarrierStatsEvent
+		if err := json.Unmarshal(raw.Payload, &e); err != nil {
+			return fmt.Errorf("carrierstats: %w", err)
+		}
+		return r.handleCarrierStats(ctx, e)
+	case journal.EventCarrierLocation:
+		var e journal.CarrierLocationEvent
+		if err := json.Unmarshal(raw.Payload, &e); err != nil {
+			return fmt.Errorf("carrierlocation: %w", err)
+		}
+		r.Session.RegisterOwnedCarrier(state.OwnedCarrier{
+			MarketID: e.CarrierID, StarSystem: e.StarSystem, SystemAddress: e.SystemAddress,
+		})
+		return nil
+	case journal.EventCarrierJump:
+		var e journal.CarrierJumpEvent
+		if err := json.Unmarshal(raw.Payload, &e); err != nil {
+			return fmt.Errorf("carrierjump: %w", err)
+		}
+		// CarrierJump is also a Location-like event for the player when they
+		// were riding their carrier through the jump.
+		if e.StarSystem != "" && e.SystemAddress != 0 {
+			r.Session.SetSystem(e.StarSystem, e.SystemAddress)
+		}
+		// Only register the carrier as owned if we already know it is —
+		// docking at someone else's carrier mid-jump shouldn't claim ownership.
+		if r.Session.IsOwnedCarrier(e.MarketID) {
+			r.Session.RegisterOwnedCarrier(state.OwnedCarrier{
+				MarketID: e.MarketID, StarSystem: e.StarSystem, SystemAddress: e.SystemAddress,
+			})
+		}
+		return nil
+	case journal.EventMarket:
+		var e journal.MarketEvent
+		if err := json.Unmarshal(raw.Payload, &e); err != nil {
+			return fmt.Errorf("market: %w", err)
+		}
+		return r.handleMarket(ctx, e)
 	}
 	return nil
+}
+
+func (r *Reporter) handleCarrierStats(ctx context.Context, e journal.CarrierStatsEvent) error {
+	if e.CarrierID == 0 {
+		return nil
+	}
+	r.Session.RegisterOwnedCarrier(state.OwnedCarrier{
+		MarketID: e.CarrierID,
+		Name:     e.Name,
+		Callsign: e.Callsign,
+	})
+	c, _ := r.Session.OwnedCarrier(e.CarrierID)
+	fc := ravencolonial.FleetCarrier{
+		MarketID:      c.MarketID,
+		Name:          c.Name,
+		Callsign:      c.Callsign,
+		StarSystem:    c.StarSystem,
+		SystemAddress: c.SystemAddress,
+	}
+	if err := r.API.PutFleetCarrier(ctx, fc); err != nil {
+		if errors.Is(err, ravencolonial.ErrNoAPIKey) {
+			// Silent skip: FC sync requires an rcc-key, which is optional.
+			return nil
+		}
+		r.emit(LevelError, "Publish FC %s failed: %v", c.Callsign, err)
+		return err
+	}
+	r.emit(LevelOK, "Published Fleet Carrier %s (%s)", c.Name, c.Callsign)
+	return nil
+}
+
+func (r *Reporter) handleMarket(ctx context.Context, e journal.MarketEvent) error {
+	if !r.Session.IsOwnedCarrier(e.MarketID) {
+		return nil // not my FC; nothing to sync
+	}
+	if r.JournalDir == "" {
+		r.emit(LevelWarn, "FC cargo sync: journal dir not set; skipping")
+		return nil
+	}
+	read := r.readMarketFile
+	if read == nil {
+		read = journal.ReadMarketFile
+	}
+	mf, err := read(r.JournalDir)
+	if err != nil {
+		r.emit(LevelError, "Read Market.json failed: %v", err)
+		return err
+	}
+	if mf.MarketID != e.MarketID {
+		// Market.json races with the journal event briefly; if the file
+		// hasn't caught up yet, skip rather than send stale data.
+		r.emit(LevelInfo, "Market.json MarketID (%d) doesn't match event (%d); skipping", mf.MarketID, e.MarketID)
+		return nil
+	}
+	cargo := cargoFromMarket(mf)
+	if err := r.API.OverwriteCarrierCargo(ctx, e.MarketID, cargo); err != nil {
+		if errors.Is(err, ravencolonial.ErrNoAPIKey) {
+			return nil
+		}
+		r.emit(LevelError, "Sync FC cargo for market %d failed: %v", e.MarketID, err)
+		return err
+	}
+	r.emit(LevelOK, "Synced FC cargo (%d commodities, %d total units)", len(cargo), sumValues(cargo))
+	return nil
+}
+
+// cargoFromMarket builds the {commodity_symbol: stock} map the API wants.
+// Items with zero stock are omitted; sending them would just clutter the
+// server-side record.
+func cargoFromMarket(mf *journal.MarketFile) ravencolonial.Cargo {
+	out := ravencolonial.Cargo{}
+	for _, it := range mf.Items {
+		if it.Stock <= 0 {
+			continue
+		}
+		key := NormalizeCommodity(it.Name)
+		if key == "" {
+			key = NormalizeCommodity(it.NameLocalised)
+		}
+		if key == "" {
+			continue
+		}
+		out[key] += it.Stock
+	}
+	return out
 }
 
 func (r *Reporter) handleDepot(ctx context.Context, e journal.ColonisationConstructionDepotEvent) error {

@@ -23,6 +23,7 @@ func TestSaveLoad_Roundtrip(t *testing.T) {
 		APIBaseURL:        "https://example.com",
 		APIKey:            "secret-key",
 		CommanderOverride: "Alt-Cmdr",
+		ReplaySession:     true,
 	}
 	if err := SaveTo(want, path); err != nil {
 		t.Fatalf("SaveTo: %v", err)

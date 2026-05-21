@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ED Colonization Reporter</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; margin: 0; background: #16161a; color: #e0e0e0; }
+    header { background: #0f0f12; padding: 10px 20px; border-bottom: 1px solid #2a2a30; }
+    header .status { display: flex; gap: 28px; font-size: 13px; color: #9ca0a8; }
+    header .status strong { color: #f0f0f0; font-weight: 600; }
+    nav { background: #1a1a20; padding: 0 16px; border-bottom: 1px solid #2a2a30; display: flex; gap: 4px; }
+    nav button { background: none; color: #9ca0a8; border: 0; padding: 12px 16px; cursor: pointer; font: inherit; border-bottom: 2px solid transparent; }
+    nav button:hover { color: #ddd; }
+    nav button.active { color: #fff; border-bottom-color: #4af; }
+    main { padding: 20px; max-width: 1100px; }
+    section h2 { font-size: 14px; color: #9ca0a8; font-weight: 500; margin: 0 0 12px 0; text-transform: uppercase; letter-spacing: 0.04em; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid #2a2a30; }
+    th { color: #888; font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
+    td.num { text-align: right; font-variant-numeric: tabular-nums; }
+    .summary { color: #9ca0a8; font-size: 13px; margin: 8px 0 16px; }
+    .log { font-family: ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace; font-size: 12.5px; line-height: 1.6; max-height: 72vh; overflow: auto; background: #0e0e12; padding: 12px 16px; border-radius: 4px; border: 1px solid #2a2a30; }
+    .log .row { padding: 1px 0; white-space: pre-wrap; word-break: break-word; }
+    .log .ERROR { color: #ff6b6b; }
+    .log .WARN  { color: #ffb84d; }
+    .log .OK    { color: #6bd587; }
+    .log .INFO  { color: #6fa9ff; }
+    form { display: grid; gap: 14px; max-width: 760px; }
+    label { display: grid; gap: 6px; font-size: 13px; }
+    label > span { color: #9ca0a8; }
+    label.row { grid-template-columns: auto 1fr; align-items: center; gap: 10px; }
+    input[type=text], input[type=password] { padding: 9px 12px; background: #1f1f25; color: #e8e8e8; border: 1px solid #2e2e36; border-radius: 4px; font: inherit; }
+    input[type=text]:focus, input[type=password]:focus { outline: none; border-color: #4af; }
+    button.action, button[type=submit] { background: #4af; color: #0a0a0c; border: 0; padding: 8px 16px; border-radius: 4px; cursor: pointer; font: inherit; font-weight: 500; }
+    button.action:hover, button[type=submit]:hover { background: #5bbcff; }
+    button.action.secondary { background: #2a2a32; color: #ddd; }
+    .row-actions { display: flex; gap: 8px; align-items: center; }
+    .notice { color: #9ca0a8; font-size: 13px; margin-top: 4px; }
+    .empty { padding: 28px 12px; text-align: center; color: #6a6e78; font-style: italic; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="status">
+      <span>Cmdr: <strong id="s-cmdr">—</strong></span>
+      <span>System: <strong id="s-system">—</strong></span>
+      <span>Dock: <strong id="s-dock">—</strong></span>
+      <span style="margin-left:auto;color:#6a6e78">v<span id="s-version">dev</span></span>
+    </div>
+  </header>
+  <nav>
+    <button data-tab="projects" class="active">Projects</button>
+    <button data-tab="activity">Activity</button>
+    <button data-tab="settings">Settings</button>
+  </nav>
+  <main>
+    <section id="tab-projects">
+      <h2>Active projects</h2>
+      <div class="row-actions">
+        <button class="action" id="btn-refresh">Refresh</button>
+        <span class="summary" id="projects-summary">Loading…</span>
+      </div>
+      <table id="projects-table">
+        <thead><tr><th>System</th><th>Build</th><th>Status</th><th class="num">Outstanding</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <div class="empty hidden" id="projects-empty">No active projects yet. Dock at a construction depot in-game and they'll show up here.</div>
+    </section>
+    <section id="tab-activity" class="hidden">
+      <h2>Activity log</h2>
+      <div class="log" id="activity-log"></div>
+    </section>
+    <section id="tab-settings" class="hidden">
+      <h2>Settings</h2>
+      <form id="settings-form">
+        <label>
+          <span>Journal directory</span>
+          <input name="journal_dir" type="text" placeholder="auto-detected if blank">
+        </label>
+        <label>
+          <span>API base URL</span>
+          <input name="api_base_url" type="text">
+        </label>
+        <label>
+          <span>API key (rcc-key) — only needed for Fleet Carrier sync</span>
+          <input name="api_key" type="password" placeholder="optional; get from ravencolonial.com/user">
+        </label>
+        <label>
+          <span>Commander override</span>
+          <input name="commander_override" type="text" placeholder="leave blank to use the commander in the journal">
+        </label>
+        <label class="row">
+          <input name="replay_session" type="checkbox">
+          <span>Replay current journal session on startup (backfill)</span>
+        </label>
+        <div class="row-actions">
+          <button type="submit">Save</button>
+          <span class="notice" id="settings-notice"></span>
+        </div>
+      </form>
+    </section>
+  </main>
+  <script>
+    const escapeHTML = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c]));
+    const $ = id => document.getElementById(id);
+
+    // tabs
+    const tabs = document.querySelectorAll('nav button');
+    tabs.forEach(b => b.addEventListener('click', () => {
+      tabs.forEach(x => x.classList.toggle('active', x === b));
+      ['projects','activity','settings'].forEach(s => $('tab-'+s).classList.toggle('hidden', s !== b.dataset.tab));
+    }));
+
+    // status
+    async function refreshStatus() {
+      try {
+        const r = await fetch('/api/status'); if (!r.ok) return;
+        const j = await r.json();
+        $('s-cmdr').textContent   = j.commander || '—';
+        $('s-system').textContent = j.starSystem || '—';
+        $('s-dock').textContent   = j.docked ? (j.stationName || '(docked)') : 'undocked';
+        $('s-version').textContent = j.version || 'dev';
+      } catch {}
+    }
+    setInterval(refreshStatus, 2000); refreshStatus();
+
+    // projects
+    async function refreshProjects() {
+      $('projects-summary').textContent = 'Loading…';
+      try {
+        const r = await fetch('/api/projects');
+        if (!r.ok) { $('projects-summary').textContent = 'Refresh failed: HTTP ' + r.status; return; }
+        const j = await r.json();
+        const tbody = document.querySelector('#projects-table tbody');
+        tbody.innerHTML = '';
+        const projects = j.projects || [];
+        $('projects-empty').classList.toggle('hidden', projects.length > 0);
+        document.querySelector('#projects-table').classList.toggle('hidden', projects.length === 0);
+        for (const p of projects) {
+          const outstanding = Object.values(p.commodities || {}).reduce((a,b) => a + (b|0), 0);
+          const tr = document.createElement('tr');
+          tr.innerHTML = `<td>${escapeHTML(p.systemName || '(unknown)')}</td>` +
+                         `<td>${escapeHTML(p.buildName || p.buildId || '(unnamed)')}</td>` +
+                         `<td>${p.complete ? 'complete' : 'active'}</td>` +
+                         `<td class="num">${outstanding.toLocaleString()}</td>`;
+          tbody.appendChild(tr);
+        }
+        const cmdr = j.commander || '—';
+        $('projects-summary').textContent = `${projects.length} active project${projects.length === 1 ? '' : 's'} for Cmdr ${cmdr}`;
+      } catch (e) {
+        $('projects-summary').textContent = 'Refresh failed: ' + e.message;
+      }
+    }
+    $('btn-refresh').addEventListener('click', refreshProjects);
+    setInterval(refreshProjects, 60000); refreshProjects();
+
+    // activity via SSE
+    function connectSSE() {
+      const es = new EventSource('/api/events');
+      const log = $('activity-log');
+      es.addEventListener('status', ev => {
+        const s = JSON.parse(ev.data);
+        const row = document.createElement('div');
+        row.className = 'row ' + s.level;
+        const time = new Date(s.time).toLocaleTimeString();
+        row.textContent = `[${time}] ${s.level.padEnd(5)} ${s.message}`;
+        log.appendChild(row);
+        log.scrollTop = log.scrollHeight;
+        while (log.children.length > 500) log.removeChild(log.firstChild);
+      });
+      es.onerror = () => { es.close(); setTimeout(connectSSE, 3000); };
+    }
+    connectSSE();
+
+    // settings load
+    (async () => {
+      try {
+        const r = await fetch('/api/config'); if (!r.ok) return;
+        const j = await r.json();
+        const f = $('settings-form');
+        f.journal_dir.value = j.journal_dir || '';
+        f.api_base_url.value = j.api_base_url || '';
+        f.api_key.value = j.api_key || '';
+        f.commander_override.value = j.commander_override || '';
+        f.replay_session.checked = !!j.replay_session;
+      } catch {}
+    })();
+    $('settings-form').addEventListener('submit', async ev => {
+      ev.preventDefault();
+      const f = ev.target;
+      const body = {
+        journal_dir: f.journal_dir.value,
+        api_base_url: f.api_base_url.value,
+        api_key: f.api_key.value,
+        commander_override: f.commander_override.value,
+        replay_session: f.replay_session.checked,
+      };
+      $('settings-notice').textContent = 'Saving…';
+      try {
+        const r = await fetch('/api/config', { method: 'POST', headers: {'content-type':'application/json'}, body: JSON.stringify(body) });
+        if (!r.ok) {
+          const text = await r.text();
+          $('settings-notice').textContent = `Save failed: HTTP ${r.status} ${text}`;
+        } else {
+          $('settings-notice').textContent = 'Saved. Some changes (journal dir) take effect on next startup.';
+        }
+      } catch (e) {
+        $('settings-notice').textContent = 'Save failed: ' + e.message;
+      }
+    });
+  </script>
+</body>
+</html>

@@ -13,6 +13,219 @@ import (
 	"github.com/pequalsnp/ed-colonization-reporter/internal/state"
 )
 
+func TestHandleCarrierStats_RegistersAndPublishes(t *testing.T) {
+	sess := state.New()
+	api := &fakeAPI{}
+	r := New(api, sess)
+	raw := mustRaw(t, journal.EventCarrierStats, map[string]any{
+		"CarrierID":     3700000123,
+		"Callsign":      "ABC-12X",
+		"Name":          "DREAMSTRIDER",
+		"DockingAccess": "all",
+	})
+	if err := r.HandleEvent(context.Background(), raw); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if !sess.IsOwnedCarrier(3700000123) {
+		t.Error("CarrierStats should register owned carrier")
+	}
+	if len(api.fcPuts) != 1 {
+		t.Fatalf("fcPuts = %d", len(api.fcPuts))
+	}
+	put := api.fcPuts[0]
+	if put.Callsign != "ABC-12X" || put.Name != "DREAMSTRIDER" || put.MarketID != 3700000123 {
+		t.Errorf("PutFleetCarrier got %+v", put)
+	}
+}
+
+func TestHandleCarrierStats_SilentWhenNoAPIKey(t *testing.T) {
+	sess := state.New()
+	api := &fakeAPI{fcPutErr: ravencolonial.ErrNoAPIKey}
+	r := New(api, sess)
+	statusCount := 0
+	r.OnStatus(func(s Status) {
+		if s.Level == LevelError {
+			statusCount++
+		}
+	})
+	raw := mustRaw(t, journal.EventCarrierStats, map[string]any{
+		"CarrierID": 3700000123, "Callsign": "ABC-12X", "Name": "X",
+	})
+	if err := r.HandleEvent(context.Background(), raw); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if !sess.IsOwnedCarrier(3700000123) {
+		t.Error("session should still register the carrier even without API key")
+	}
+	if statusCount != 0 {
+		t.Errorf("expected no error statuses for missing API key; got %d", statusCount)
+	}
+}
+
+func TestHandleCarrierLocation_UpdatesSystem(t *testing.T) {
+	sess := state.New()
+	sess.RegisterOwnedCarrier(state.OwnedCarrier{MarketID: 42, Name: "X", Callsign: "Y"})
+	r := New(&fakeAPI{}, sess)
+	raw := mustRaw(t, journal.EventCarrierLocation, map[string]any{
+		"CarrierID": 42, "StarSystem": "Sol", "SystemAddress": 100,
+	})
+	if err := r.HandleEvent(context.Background(), raw); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	c, _ := sess.OwnedCarrier(42)
+	if c.StarSystem != "Sol" || c.SystemAddress != 100 || c.Callsign != "Y" {
+		t.Errorf("merged carrier: %+v", c)
+	}
+}
+
+func TestHandleMarket_SyncsCargoForOwnedFC(t *testing.T) {
+	sess := state.New()
+	sess.RegisterOwnedCarrier(state.OwnedCarrier{MarketID: 3700000123, Name: "X", Callsign: "Y"})
+	api := &fakeAPI{}
+	r := New(api, sess)
+	r.JournalDir = "/fake" // exists only via the override below
+	r.readMarketFile = func(dir string) (*journal.MarketFile, error) {
+		return &journal.MarketFile{
+			MarketID: 3700000123,
+			Items: []journal.MarketItem{
+				{Name: "$titanium_name;", Stock: 420},
+				{Name: "$steel_name;", Stock: 100},
+				{Name: "$gold_name;", Stock: 0}, // should be dropped
+			},
+		}, nil
+	}
+	raw := mustRaw(t, journal.EventMarket, map[string]any{
+		"MarketID":    3700000123,
+		"StationType": "FleetCarrier",
+	})
+	if err := r.HandleEvent(context.Background(), raw); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if len(api.fcCargo) != 1 {
+		t.Fatalf("fcCargo = %d", len(api.fcCargo))
+	}
+	call := api.fcCargo[0]
+	if call.MarketID != 3700000123 {
+		t.Errorf("market = %d", call.MarketID)
+	}
+	want := ravencolonial.Cargo{"titanium": 420, "steel": 100}
+	if !reflect.DeepEqual(call.Cargo, want) {
+		t.Errorf("cargo = %+v, want %+v", call.Cargo, want)
+	}
+}
+
+func TestHandleMarket_SkipsNonOwnedFC(t *testing.T) {
+	sess := state.New()
+	api := &fakeAPI{}
+	r := New(api, sess)
+	r.JournalDir = "/fake"
+	r.readMarketFile = func(dir string) (*journal.MarketFile, error) {
+		t.Fatal("should not be called for non-owned market")
+		return nil, nil
+	}
+	raw := mustRaw(t, journal.EventMarket, map[string]any{
+		"MarketID":    99,
+		"StationType": "FleetCarrier",
+	})
+	if err := r.HandleEvent(context.Background(), raw); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if len(api.fcCargo) != 0 {
+		t.Errorf("should not have synced for non-owned market")
+	}
+}
+
+func TestHandleMarket_SkipsStaleMarketFile(t *testing.T) {
+	sess := state.New()
+	sess.RegisterOwnedCarrier(state.OwnedCarrier{MarketID: 42, Name: "X", Callsign: "Y"})
+	api := &fakeAPI{}
+	r := New(api, sess)
+	r.JournalDir = "/fake"
+	r.readMarketFile = func(dir string) (*journal.MarketFile, error) {
+		return &journal.MarketFile{MarketID: 99, Items: nil}, nil // wrong market!
+	}
+	raw := mustRaw(t, journal.EventMarket, map[string]any{
+		"MarketID":    42,
+		"StationType": "FleetCarrier",
+	})
+	if err := r.HandleEvent(context.Background(), raw); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if len(api.fcCargo) != 0 {
+		t.Errorf("should not have synced with stale Market.json")
+	}
+}
+
+func TestHandleMarket_SilentWhenNoAPIKey(t *testing.T) {
+	sess := state.New()
+	sess.RegisterOwnedCarrier(state.OwnedCarrier{MarketID: 42, Name: "X", Callsign: "Y"})
+	api := &fakeAPI{fcCargoErr: ravencolonial.ErrNoAPIKey}
+	r := New(api, sess)
+	r.JournalDir = "/fake"
+	r.readMarketFile = func(dir string) (*journal.MarketFile, error) {
+		return &journal.MarketFile{MarketID: 42, Items: []journal.MarketItem{{Name: "$titanium_name;", Stock: 1}}}, nil
+	}
+	errCount := 0
+	r.OnStatus(func(s Status) {
+		if s.Level == LevelError {
+			errCount++
+		}
+	})
+	raw := mustRaw(t, journal.EventMarket, map[string]any{
+		"MarketID":    42,
+		"StationType": "FleetCarrier",
+	})
+	if err := r.HandleEvent(context.Background(), raw); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if errCount != 0 {
+		t.Errorf("expected no error status for missing key, got %d", errCount)
+	}
+}
+
+func TestHandleCarrierJump_PreservesOwnedRecord(t *testing.T) {
+	sess := state.New()
+	sess.RegisterOwnedCarrier(state.OwnedCarrier{MarketID: 42, Name: "MY-FC", Callsign: "ABC-12X"})
+	r := New(&fakeAPI{}, sess)
+	raw := mustRaw(t, journal.EventCarrierJump, map[string]any{
+		"Docked":        true,
+		"StationName":   "MY-FC ABC-12X",
+		"StationType":   "FleetCarrier",
+		"MarketID":      42,
+		"StarSystem":    "Alpha Centauri",
+		"SystemAddress": 1234567,
+	})
+	if err := r.HandleEvent(context.Background(), raw); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	// Should update player's system AND merge into owned record.
+	name, addr := sess.System()
+	if name != "Alpha Centauri" || addr != 1234567 {
+		t.Errorf("player system = (%q, %d)", name, addr)
+	}
+	c, _ := sess.OwnedCarrier(42)
+	if c.StarSystem != "Alpha Centauri" || c.Name != "MY-FC" {
+		t.Errorf("owned carrier merge wrong: %+v", c)
+	}
+}
+
+func TestHandleCarrierJump_DoesNotClaimOwnershipOfOtherFC(t *testing.T) {
+	sess := state.New()
+	r := New(&fakeAPI{}, sess)
+	raw := mustRaw(t, journal.EventCarrierJump, map[string]any{
+		"Docked":        true,
+		"MarketID":      999, // not ours
+		"StarSystem":    "Beta",
+		"SystemAddress": 1,
+	})
+	if err := r.HandleEvent(context.Background(), raw); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if sess.IsOwnedCarrier(999) {
+		t.Error("docking on someone else's FC must not register it as owned")
+	}
+}
+
 // fakeAPI is a minimal stub of the ravencolonial APIClient used to assert
 // what the reporter calls.
 type fakeAPI struct {
@@ -20,9 +233,18 @@ type fakeAPI struct {
 	updates       []ravencolonial.ProjectUpdate
 	completes     []string
 	contributions []contributionCall
+	fcPuts        []ravencolonial.FleetCarrier
+	fcCargo       []fcCargoCall
 	lookupResp    map[lookupKey]*ravencolonial.Project
 	lookupErr     map[lookupKey]error
 	updateErr     error
+	fcPutErr      error
+	fcCargoErr    error
+}
+
+type fcCargoCall struct {
+	MarketID int64
+	Cargo    ravencolonial.Cargo
 }
 
 type lookupCall struct {
@@ -65,6 +287,16 @@ func (f *fakeAPI) CompleteProject(_ context.Context, buildID string) error {
 func (f *fakeAPI) Contribute(_ context.Context, buildID, cmdr string, c ravencolonial.Contribution) error {
 	f.contributions = append(f.contributions, contributionCall{buildID, cmdr, c})
 	return nil
+}
+
+func (f *fakeAPI) PutFleetCarrier(_ context.Context, fc ravencolonial.FleetCarrier) error {
+	f.fcPuts = append(f.fcPuts, fc)
+	return f.fcPutErr
+}
+
+func (f *fakeAPI) OverwriteCarrierCargo(_ context.Context, marketID int64, c ravencolonial.Cargo) error {
+	f.fcCargo = append(f.fcCargo, fcCargoCall{MarketID: marketID, Cargo: c})
+	return f.fcCargoErr
 }
 
 func mustRaw(t *testing.T, event string, payload any) journal.Raw {

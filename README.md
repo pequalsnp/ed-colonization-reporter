@@ -10,9 +10,9 @@ is not available) but runs on Windows too. Scope is intentionally narrow:
 
 ## Status
 
-Pre-release. v1 implements the core journal-tail → API-report loop and a
-project-progress view. Fleet Carrier sync and project creation are planned for
-a later release.
+Alpha. The core colonization-reporting loop, Fleet Carrier cargo sync, and
+in-flight backfill are working. Project creation and the system-claim flow
+are not yet implemented.
 
 ## What it does
 
@@ -22,6 +22,14 @@ a later release.
   state for the construction site you are docked at.
 - On `ColonisationContribution` events, posts your commander's delivery to
   the matching project so contributions are attributed to you.
+- On `CarrierStats` / `CarrierLocation`, registers your Fleet Carrier with
+  ravencolonial; on `Market` events at your own FC, posts the current
+  cargo snapshot. Fleet Carrier sync requires an `rcc-key` from
+  [ravencolonial.com/user](https://ravencolonial.com/user); without one,
+  carrier sync is silently skipped.
+- Optional **backfill** mode replays the current journal file from the
+  start on launch, so a mid-session restart re-reports any depots and
+  contributions the running game has already recorded.
 - Surfaces the projects you are linked to, their per-commodity progress, and
   any reporting errors in a small GUI.
 
@@ -29,25 +37,22 @@ a later release.
 
 ### From source
 
-Requires Go 1.24+. Linux needs the usual OpenGL/X11 dev packages for Fyne; on
-Arch/CachyOS:
+Requires Go 1.24+. No CGO and no system dependencies — a single static
+binary on every platform.
 
 ```
-sudo pacman -S --needed base-devel libxcursor libxrandr libxinerama libxi \
-    mesa libxxf86vm
-```
-
-Build the binary:
-
-```
-go build -o edcolreport ./cmd/edcolreport
+CGO_ENABLED=0 go build -o edcolreport ./cmd/edcolreport
 ./edcolreport
 ```
 
+The binary starts a local HTTP server on a random loopback port and opens
+your default browser to it. On Linux you can pass `--no-browser` and follow
+the printed URL instead.
+
 ### Pre-built releases
 
-Pre-built Linux and Windows binaries are attached to GitHub Releases once v1
-ships.
+Pre-built Linux and Windows binaries are attached to
+[GitHub Releases](https://github.com/pequalsnp/ed-colonization-reporter/releases).
 
 ## Configuration
 
@@ -73,12 +78,22 @@ The CI workflow runs the same on every push.
 ### Layout
 
 - `cmd/edcolreport` — main entry point (wires everything together).
-- `internal/journal` — journal directory detection, JSONL tailing, event types.
+- `internal/journal` — journal directory detection, JSONL tailing, event types, Market.json reader.
 - `internal/ravencolonial` — HTTP client for the ravencolonial.com API.
-- `internal/state` — in-memory session state (commander, system, dock).
+- `internal/state` — in-memory session state (commander, system, dock, owned carriers).
 - `internal/reporter` — orchestrates journal events → API calls.
 - `internal/config` — load/save user settings.
-- `internal/ui` — Fyne GUI.
+- `internal/web` — local HTTP server with an embedded browser UI.
+
+### Design choices
+
+- **Browser UI, not a native desktop app.** The binary spins up a local
+  HTTP server on a random loopback port and opens your default browser
+  to it. This avoids any CGO/GUI-framework dependency, so the binary is a
+  single ~10 MB static executable on every platform with no system libs
+  required. The downside is the UI is a browser tab, not a window.
+- **Pure Go.** `CGO_ENABLED=0` everywhere. Cross-compile to Windows
+  amd64 from Linux is `GOOS=windows go build`, no toolchain dance.
 
 ## Acknowledgements
 

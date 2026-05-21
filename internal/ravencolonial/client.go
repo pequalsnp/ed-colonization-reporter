@@ -135,6 +135,43 @@ func (c *Client) Contribute(ctx context.Context, buildID, cmdr string, contrib C
 	return c.do(ctx, http.MethodPost, path, contrib, nil)
 }
 
+// PutFleetCarrier registers or updates the Fleet Carrier metadata for a
+// MarketID. Requires the rcc-key (configured via WithAPIKey); the server
+// will return 401/403 if no key is set.
+func (c *Client) PutFleetCarrier(ctx context.Context, fc FleetCarrier) error {
+	if fc.MarketID == 0 {
+		return errors.New("PutFleetCarrier: MarketID required")
+	}
+	if c.apiKey == "" {
+		return ErrNoAPIKey
+	}
+	path := fmt.Sprintf("/api/fc/%d", fc.MarketID)
+	return c.do(ctx, http.MethodPut, path, fc, nil)
+}
+
+// OverwriteCarrierCargo replaces the cargo snapshot stored for a Fleet
+// Carrier on the server. Pass the {commodity: stock} map you parsed from
+// Market.json. Requires the rcc-key.
+func (c *Client) OverwriteCarrierCargo(ctx context.Context, marketID int64, cargo Cargo) error {
+	if marketID == 0 {
+		return errors.New("OverwriteCarrierCargo: marketID required")
+	}
+	if c.apiKey == "" {
+		return ErrNoAPIKey
+	}
+	// nil-safe: send an empty object for empty cargo so the server clears it.
+	if cargo == nil {
+		cargo = Cargo{}
+	}
+	path := fmt.Sprintf("/api/fc/%d/cargo", marketID)
+	return c.do(ctx, http.MethodPost, path, cargo, nil)
+}
+
+// ErrNoAPIKey is returned by FC-write methods when no rcc-key is configured.
+// Callers can match on this to silently skip Fleet Carrier sync rather than
+// surfacing a server-side 401 to the user.
+var ErrNoAPIKey = errors.New("ravencolonial: API key (rcc-key) required for this endpoint")
+
 // ActiveProjects lists the projects a commander is linked to.
 func (c *Client) ActiveProjects(ctx context.Context, cmdr string) ([]Project, error) {
 	if cmdr == "" {

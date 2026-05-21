@@ -10,13 +10,16 @@ import (
 // full journal spec defines hundreds of event types; we only care about the
 // ones below.
 const (
-	EventCommander                 = "Commander"
-	EventLoadGame                  = "LoadGame"
-	EventLocation                  = "Location"
-	EventFSDJump                   = "FSDJump"
-	EventCarrierJump               = "CarrierJump"
-	EventDocked                    = "Docked"
-	EventUndocked                  = "Undocked"
+	EventCommander                     = "Commander"
+	EventLoadGame                      = "LoadGame"
+	EventLocation                      = "Location"
+	EventFSDJump                       = "FSDJump"
+	EventCarrierJump                   = "CarrierJump"
+	EventCarrierLocation               = "CarrierLocation"
+	EventCarrierStats                  = "CarrierStats"
+	EventDocked                        = "Docked"
+	EventUndocked                      = "Undocked"
+	EventMarket                        = "Market"
 	EventColonisationConstructionDepot = "ColonisationConstructionDepot"
 	EventColonisationContribution      = "ColonisationContribution"
 )
@@ -138,6 +141,49 @@ type ColonisationContributionEvent struct {
 	Envelope
 	MarketID      int64          `json:"MarketID"`
 	Contributions []Contribution `json:"Contributions"`
+}
+
+// CarrierStatsEvent is emitted on game start (and on demand) with the full
+// state of the commander's owned Fleet Carrier. CarrierID == MarketID.
+type CarrierStatsEvent struct {
+	Envelope
+	CarrierID     int64  `json:"CarrierID"`
+	Callsign      string `json:"Callsign"`
+	Name          string `json:"Name"`
+	DockingAccess string `json:"DockingAccess"`
+}
+
+// CarrierLocationEvent is emitted when the player's carrier arrives in a
+// new system. Confirms ownership (game only emits this for your carrier)
+// and gives us the current system.
+type CarrierLocationEvent struct {
+	Envelope
+	CarrierID     int64  `json:"CarrierID"`
+	StarSystem    string `json:"StarSystem"`
+	SystemAddress int64  `json:"SystemAddress"`
+}
+
+// CarrierJumpEvent fires when the player is docked on their carrier during
+// a jump — it's a Location-like event with carrier-specific fields.
+type CarrierJumpEvent struct {
+	Envelope
+	Docked        bool   `json:"Docked"`
+	StationName   string `json:"StationName"`
+	StationType   string `json:"StationType"`
+	MarketID      int64  `json:"MarketID"`
+	StarSystem    string `json:"StarSystem"`
+	SystemAddress int64  `json:"SystemAddress"`
+}
+
+// MarketEvent is the brief journal-side record that fires when the player
+// opens a station's commodities market. The full inventory is written to
+// Market.json — see internal/journal Market.json reader.
+type MarketEvent struct {
+	Envelope
+	MarketID    int64  `json:"MarketID"`
+	StationName string `json:"StationName"`
+	StationType string `json:"StationType"`
+	StarSystem  string `json:"StarSystem"`
 }
 
 // trimUTF8BOM strips a leading UTF-8 BOM (EF BB BF) if present. Frontier
