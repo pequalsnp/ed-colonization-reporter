@@ -1,0 +1,23 @@
+# Binaries
+/edcolreport
+/edcolreport.exe
+/dist/
+/build/
+
+# Test artifacts
+*.test
+*.out
+coverage.out
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*~
+
+# Local config (real users keep config under XDG dirs)
+/config.local.toml
