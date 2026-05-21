@@ -85,6 +85,9 @@ func New(api APIClient, sess *state.Session) *Reporter {
 	return &Reporter{API: api, Session: sess}
 }
 
+// Name implements the destinations.Destination interface.
+func (r *Reporter) Name() string { return "ravencolonial" }
+
 // OnStatus registers a callback for status updates. Passing nil clears it.
 // The callback is invoked synchronously; long-running consumers should
 // hand off to a goroutine.
@@ -107,6 +110,12 @@ func (r *Reporter) emit(level Level, format string, args ...any) {
 // silently ignored.
 func (r *Reporter) HandleEvent(ctx context.Context, raw journal.Raw) error {
 	switch raw.Event {
+	case journal.EventFileheader:
+		var e journal.FileheaderEvent
+		if err := json.Unmarshal(raw.Payload, &e); err != nil {
+			return fmt.Errorf("fileheader: %w", err)
+		}
+		r.Session.SetGameVersion(e.GameVersion, e.GameBuild)
 	case journal.EventCommander:
 		var e journal.CommanderEvent
 		if err := json.Unmarshal(raw.Payload, &e); err != nil {
@@ -122,12 +131,18 @@ func (r *Reporter) HandleEvent(ctx context.Context, raw journal.Raw) error {
 		if e.Commander != "" {
 			r.Session.SetCommander(e.Commander, e.FID)
 		}
+		if e.GameVersion != "" || e.GameBuild != "" {
+			r.Session.SetGameVersion(e.GameVersion, e.GameBuild)
+		}
+		// LoadGame may omit Horizons/Odyssey on older clients; pointer
+		// preserves the distinction between "absent" and "explicitly false".
+		r.Session.SetDLCFlags(e.Horizons, e.Odyssey)
 	case journal.EventLocation, journal.EventFSDJump:
 		var e journal.LocationLikeEvent
 		if err := json.Unmarshal(raw.Payload, &e); err != nil {
 			return fmt.Errorf("%s: %w", raw.Event, err)
 		}
-		r.Session.SetSystem(e.StarSystem, e.SystemAddress)
+		r.Session.SetSystemWithPos(e.StarSystem, e.SystemAddress, e.StarPos)
 	case journal.EventDocked:
 		var e journal.DockedEvent
 		if err := json.Unmarshal(raw.Payload, &e); err != nil {
@@ -174,7 +189,7 @@ func (r *Reporter) HandleEvent(ctx context.Context, raw journal.Raw) error {
 		// CarrierJump is also a Location-like event for the player when they
 		// were riding their carrier through the jump.
 		if e.StarSystem != "" && e.SystemAddress != 0 {
-			r.Session.SetSystem(e.StarSystem, e.SystemAddress)
+			r.Session.SetSystemWithPos(e.StarSystem, e.SystemAddress, e.StarPos)
 		}
 		// Only register the carrier as owned if we already know it is —
 		// docking at someone else's carrier mid-jump shouldn't claim ownership.

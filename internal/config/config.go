@@ -41,6 +41,20 @@ type Config struct {
 	// after a restart mid-session so we re-report depot states the game
 	// has already logged. Defaults to false.
 	ReplaySession bool `toml:"replay_session"`
+
+	// EDDNEnabled turns on uploads to the EDDN community data network
+	// (https://eddn.edcd.io). Default off so users opt in explicitly.
+	EDDNEnabled bool `toml:"eddn_enabled"`
+
+	// EDSMEnabled and EDSMAPIKey control journal uploads to EDSM
+	// (https://www.edsm.net). API key from https://www.edsm.net/en/settings/api.
+	EDSMEnabled bool   `toml:"edsm_enabled"`
+	EDSMAPIKey  string `toml:"edsm_api_key"`
+
+	// InaraEnabled and InaraAPIKey control uploads to Inara
+	// (https://inara.cz). API key from https://inara.cz/settings-api/.
+	InaraEnabled bool   `toml:"inara_enabled"`
+	InaraAPIKey  string `toml:"inara_api_key"`
 }
 
 // Default returns a Config with the canonical defaults filled in. The defaults

@@ -10,12 +10,15 @@ is not available) but runs on Windows too. Scope is intentionally narrow:
 
 ## Status
 
-Alpha. The core colonization-reporting loop, Fleet Carrier cargo sync, and
-in-flight backfill are working. Project creation and the system-claim flow
-are not yet implemented.
+Alpha. The core colonization-reporting loop, Fleet Carrier cargo sync,
+in-flight backfill, and community uploads to **EDDN**, **EDSM**, and
+**Inara** are working. Project creation, the system-claim flow, and
+richer Inara mappings (ship loadout, cargo, materials, missions) are
+not yet implemented.
 
 ## What it does
 
+**Colonization (ravencolonial.com)**
 - Watches your Elite Dangerous journal directory and detects new entries in
   real time.
 - On `ColonisationConstructionDepot` events, reports per-commodity supply
@@ -25,13 +28,27 @@ are not yet implemented.
 - On `CarrierStats` / `CarrierLocation`, registers your Fleet Carrier with
   ravencolonial; on `Market` events at your own FC, posts the current
   cargo snapshot. Fleet Carrier sync requires an `rcc-key` from
-  [ravencolonial.com/user](https://ravencolonial.com/user); without one,
-  carrier sync is silently skipped.
-- Optional **backfill** mode replays the current journal file from the
-  start on launch, so a mid-session restart re-reports any depots and
-  contributions the running game has already recorded.
-- Surfaces the projects you are linked to, their per-commodity progress, and
-  any reporting errors in a small GUI.
+  [ravencolonial.com/user](https://ravencolonial.com/user).
+
+**Community uploads (EDMC-style)**
+- **[EDDN](https://eddn.edcd.io/)** — anonymous: forwards `FSDJump`,
+  `Location`, `Docked`, `CarrierJump`, and `Market.json` snapshots as
+  schema-validated journal/1 and commodity/3 messages. No API key.
+- **[EDSM](https://www.edsm.net/)** — relays journal events to the EDSM
+  star-map and commander tracker, honouring the server-provided discard
+  list and rate-limit headers. Requires an API key from
+  [edsm.net/en/settings/api](https://www.edsm.net/en/settings/api).
+- **[Inara](https://inara.cz/)** — pushes typed location/dock/carrier-jump
+  events plus pilot ranks to your Inara profile, batched every 30 seconds.
+  Requires an API key from [inara.cz/settings-api](https://inara.cz/settings-api/).
+  Silently skips beta/legacy galaxies.
+
+**Convenience**
+- Optional **backfill** replays the current journal file from the start
+  on launch so a mid-session restart re-reports anything the running
+  game has already logged.
+- Local browser UI surfaces active projects, a live activity log, and a
+  settings page with toggles + API-key fields for each destination.
 
 ## Install
 

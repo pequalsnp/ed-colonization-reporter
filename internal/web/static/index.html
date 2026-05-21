@@ -97,6 +97,29 @@
           <input name="replay_session" type="checkbox">
           <span>Replay current journal session on startup (backfill)</span>
         </label>
+        <fieldset style="border: 1px solid #2a2a30; border-radius: 4px; padding: 12px 16px; margin: 4px 0;">
+          <legend style="color: #9ca0a8; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; padding: 0 6px;">Community uploads</legend>
+          <label class="row" style="margin: 4px 0;">
+            <input name="eddn_enabled" type="checkbox">
+            <span>Upload to <a href="https://eddn.edcd.io/" target="_blank" rel="noopener" style="color: #6fa9ff;">EDDN</a> — anonymous community data network (commodity prices, system data)</span>
+          </label>
+          <label class="row" style="margin: 12px 0 4px;">
+            <input name="edsm_enabled" type="checkbox">
+            <span>Upload to <a href="https://www.edsm.net/" target="_blank" rel="noopener" style="color: #6fa9ff;">EDSM</a> — star map &amp; commander tracking (requires API key)</span>
+          </label>
+          <label style="margin: 4px 0 0 26px; max-width: 600px;">
+            <span>EDSM API key</span>
+            <input name="edsm_api_key" type="password" placeholder="from edsm.net/en/settings/api">
+          </label>
+          <label class="row" style="margin: 16px 0 4px;">
+            <input name="inara_enabled" type="checkbox">
+            <span>Upload to <a href="https://inara.cz/" target="_blank" rel="noopener" style="color: #6fa9ff;">Inara</a> — commander profile, travel log, ranks (requires API key)</span>
+          </label>
+          <label style="margin: 4px 0 0 26px; max-width: 600px;">
+            <span>Inara API key</span>
+            <input name="inara_api_key" type="password" placeholder="from inara.cz/settings-api/">
+          </label>
+        </fieldset>
         <div class="row-actions">
           <button type="submit">Save</button>
           <span class="notice" id="settings-notice"></span>
@@ -187,6 +210,11 @@
         f.api_key.value = j.api_key || '';
         f.commander_override.value = j.commander_override || '';
         f.replay_session.checked = !!j.replay_session;
+        f.eddn_enabled.checked = !!j.eddn_enabled;
+        f.edsm_enabled.checked = !!j.edsm_enabled;
+        f.edsm_api_key.value = j.edsm_api_key || '';
+        f.inara_enabled.checked = !!j.inara_enabled;
+        f.inara_api_key.value = j.inara_api_key || '';
       } catch {}
     })();
     $('settings-form').addEventListener('submit', async ev => {
@@ -198,6 +226,11 @@
         api_key: f.api_key.value,
         commander_override: f.commander_override.value,
         replay_session: f.replay_session.checked,
+        eddn_enabled: f.eddn_enabled.checked,
+        edsm_enabled: f.edsm_enabled.checked,
+        edsm_api_key: f.edsm_api_key.value,
+        inara_enabled: f.inara_enabled.checked,
+        inara_api_key: f.inara_api_key.value,
       };
       $('settings-notice').textContent = 'Saving…';
       try {

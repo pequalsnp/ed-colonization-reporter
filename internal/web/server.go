@@ -17,6 +17,10 @@ import (
 	"time"
 
 	"github.com/pequalsnp/ed-colonization-reporter/internal/config"
+	"github.com/pequalsnp/ed-colonization-reporter/internal/destinations"
+	"github.com/pequalsnp/ed-colonization-reporter/internal/destinations/eddn"
+	"github.com/pequalsnp/ed-colonization-reporter/internal/destinations/edsm"
+	"github.com/pequalsnp/ed-colonization-reporter/internal/destinations/inara"
 	"github.com/pequalsnp/ed-colonization-reporter/internal/journal"
 	"github.com/pequalsnp/ed-colonization-reporter/internal/ravencolonial"
 	"github.com/pequalsnp/ed-colonization-reporter/internal/reporter"
@@ -41,6 +45,10 @@ type Server struct {
 	session *state.Session
 	client  *ravencolonial.Client
 	rep     *reporter.Reporter
+	eddn    *eddn.Uploader
+	edsm    *edsm.Uploader
+	inara   *inara.Uploader
+	mux     *destinations.Multiplex
 
 	hub      *statusHub
 	listener net.Listener
@@ -95,6 +103,13 @@ func (s *Server) Start(ctx context.Context) error {
 	s.tailerCancel = cancel
 	go s.runTailer(tailerCtx)
 
+	// Fetch the EDSM discard list on startup (and refresh periodically).
+	// Safe to start even when EDSM is disabled — it's a tiny HTTP call.
+	s.edsm.StartBackground(tailerCtx)
+	// Spin up the Inara batch flusher. Runs even when Inara is disabled;
+	// Flush() is a no-op without an API key.
+	s.inara.StartBackground(tailerCtx, 0)
+
 	if s.OpenBrowser != nil {
 		s.OpenBrowser(s.URL())
 	}
@@ -132,7 +147,48 @@ func (s *Server) initSessionAndReporter() error {
 	s.rep = reporter.New(s.client, s.session)
 	s.rep.JournalDir = resolveJournalDir(s.cfg.JournalDir)
 	s.rep.OnStatus(s.hub.Publish)
+
+	statusBridge := func(level, msg string) {
+		s.hub.Publish(reporter.Status{Time: time.Now(), Level: parseLevel(level), Message: msg})
+	}
+
+	s.eddn = eddn.New(eddn.SoftwareID{Name: "edcolreport", Version: s.Version}, s.session)
+	s.eddn.JournalDir = resolveJournalDir(s.cfg.JournalDir)
+	s.eddn.OnStatus = statusBridge
+	s.eddn.SetEnabled(s.cfg.EDDNEnabled)
+
+	s.edsm = edsm.New(edsm.SoftwareID{Name: "edcolreport", Version: s.Version}, s.session)
+	s.edsm.OnStatus = statusBridge
+	s.edsm.SetAPIKey(s.cfg.EDSMAPIKey)
+	s.edsm.SetEnabled(s.cfg.EDSMEnabled)
+
+	s.inara = inara.New(inara.SoftwareID{Name: "edcolreport", Version: s.Version}, s.session)
+	s.inara.OnStatus = statusBridge
+	s.inara.SetAPIKey(s.cfg.InaraAPIKey)
+	s.inara.SetEnabled(s.cfg.InaraEnabled)
+
+	s.mux = destinations.NewMultiplex(s.rep, s.eddn, s.edsm, s.inara)
+	s.mux.OnError = func(name string, err error) {
+		// Don't surface per-event errors here — destinations emit their own
+		// user-visible status messages. This callback exists for diagnostics
+		// only.
+		_ = err
+	}
 	return nil
+}
+
+// parseLevel maps a string log level to the reporter.Level enum.
+func parseLevel(s string) reporter.Level {
+	switch s {
+	case "OK":
+		return reporter.LevelOK
+	case "WARN":
+		return reporter.LevelWarn
+	case "ERROR":
+		return reporter.LevelError
+	default:
+		return reporter.LevelInfo
+	}
 }
 
 func resolveJournalDir(configured string) string {
@@ -180,10 +236,9 @@ func (s *Server) runTailer(ctx context.Context) {
 	go func() { tailErr <- tl.Run(ctx, events) }()
 
 	for raw := range events {
-		if err := s.rep.HandleEvent(ctx, raw); err != nil {
-			// Reporter already emits a status for failures we care about.
-			_ = err
-		}
+		// Multiplex dispatches to every configured destination (ravencolonial,
+		// EDDN, and any future ones). Each destination logs its own errors.
+		_ = s.mux.HandleEvent(ctx, raw)
 	}
 	if err := <-tailErr; err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 		s.hub.Publish(reporter.Status{

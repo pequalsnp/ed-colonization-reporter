@@ -76,6 +76,11 @@ type configDTO struct {
 	APIKey            string `json:"api_key"`
 	CommanderOverride string `json:"commander_override"`
 	ReplaySession     bool   `json:"replay_session"`
+	EDDNEnabled       bool   `json:"eddn_enabled"`
+	EDSMEnabled       bool   `json:"edsm_enabled"`
+	EDSMAPIKey        string `json:"edsm_api_key"`
+	InaraEnabled      bool   `json:"inara_enabled"`
+	InaraAPIKey       string `json:"inara_api_key"`
 }
 
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
@@ -90,6 +95,11 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			APIKey:            c.APIKey,
 			CommanderOverride: c.CommanderOverride,
 			ReplaySession:     c.ReplaySession,
+			EDDNEnabled:       c.EDDNEnabled,
+			EDSMEnabled:       c.EDSMEnabled,
+			EDSMAPIKey:        c.EDSMAPIKey,
+			InaraEnabled:      c.InaraEnabled,
+			InaraAPIKey:       c.InaraAPIKey,
 		})
 	case http.MethodPost:
 		var in configDTO
@@ -103,6 +113,11 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			APIKey:            in.APIKey,
 			CommanderOverride: in.CommanderOverride,
 			ReplaySession:     in.ReplaySession,
+			EDDNEnabled:       in.EDDNEnabled,
+			EDSMEnabled:       in.EDSMEnabled,
+			EDSMAPIKey:        in.EDSMAPIKey,
+			InaraEnabled:      in.InaraEnabled,
+			InaraAPIKey:       in.InaraAPIKey,
 		}
 		if newCfg.APIBaseURL == "" {
 			newCfg.APIBaseURL = ravencolonial.DefaultBaseURL
@@ -125,6 +140,24 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		s.rep.OnStatus(s.hub.Publish)
 		if newCfg.CommanderOverride != "" {
 			s.session.SetCommander(newCfg.CommanderOverride, "")
+		}
+		// Hot-update the EDDN destination too — enable/disable flag and
+		// journal dir can change without restart.
+		if s.eddn != nil {
+			s.eddn.SetEnabled(newCfg.EDDNEnabled)
+			s.eddn.JournalDir = resolveJournalDir(newCfg.JournalDir)
+		}
+		if s.edsm != nil {
+			s.edsm.SetAPIKey(newCfg.EDSMAPIKey)
+			s.edsm.SetEnabled(newCfg.EDSMEnabled)
+		}
+		if s.inara != nil {
+			s.inara.SetAPIKey(newCfg.InaraAPIKey)
+			s.inara.SetEnabled(newCfg.InaraEnabled)
+		}
+		// Rebuild the destination set so the new ravencolonial reporter is in it.
+		if s.mux != nil {
+			s.mux.Replace(s.rep, s.eddn, s.edsm, s.inara)
 		}
 		s.mu.Unlock()
 		s.hub.Publish(reporter.Status{

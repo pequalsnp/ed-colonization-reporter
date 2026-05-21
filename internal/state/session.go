@@ -12,9 +12,18 @@ type Session struct {
 	fid           string
 	starSystem    string
 	systemAddress int64
+	starPos       [3]float64
+	hasStarPos    bool
 	docked        bool
 	marketID      int64
 	stationName   string
+
+	// Game version/build/DLC flags, extracted from Fileheader and LoadGame.
+	// Required by EDDN uploads.
+	gameVersion string
+	gameBuild   string
+	horizons    *bool
+	odyssey     *bool
 
 	// buildByMarket caches the buildId we last resolved for a given MarketID
 	// so contribution events can post without an extra lookup.
@@ -67,11 +76,74 @@ func (s *Session) SetSystem(name string, address int64) {
 	s.systemAddress = address
 }
 
+// SetSystemWithPos is like SetSystem but also records the galactic
+// coordinates of the system, which EDDN needs to attach to relayed events.
+func (s *Session) SetSystemWithPos(name string, address int64, pos [3]float64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.starSystem = name
+	s.systemAddress = address
+	s.starPos = pos
+	s.hasStarPos = true
+}
+
 // System returns the current system name and id64.
 func (s *Session) System() (name string, address int64) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.starSystem, s.systemAddress
+}
+
+// StarPos returns the galactic coordinates of the current system and a flag
+// indicating whether they are known yet.
+func (s *Session) StarPos() ([3]float64, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.starPos, s.hasStarPos
+}
+
+// SetGameVersion records the gameversion/build strings that EDDN headers
+// require. Pass empty strings for fields the game didn't supply.
+func (s *Session) SetGameVersion(version, build string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if version != "" {
+		s.gameVersion = version
+	}
+	if build != "" {
+		s.gameBuild = build
+	}
+}
+
+// GameVersion returns the cached game version/build strings.
+func (s *Session) GameVersion() (version, build string) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.gameVersion, s.gameBuild
+}
+
+// SetDLCFlags records Horizons/Odyssey availability from LoadGame. Pass nil
+// for fields LoadGame didn't supply (older clients don't ship these flags).
+// Nil-ness is preserved — EDDN must omit the field rather than send false.
+func (s *Session) SetDLCFlags(horizons, odyssey *bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if horizons != nil {
+		v := *horizons
+		s.horizons = &v
+	}
+	if odyssey != nil {
+		v := *odyssey
+		s.odyssey = &v
+	}
+}
+
+// DLCFlags returns the cached Horizons/Odyssey pointers. Either or both may
+// be nil if LoadGame did not supply them.
+func (s *Session) DLCFlags() (horizons, odyssey *bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.horizons, s.odyssey
 }
 
 // SetDocked records that the player has docked at a station/market.
@@ -175,6 +247,8 @@ type Snapshot struct {
 	Docked        bool
 	StationName   string
 	MarketID      int64
+	GameVersion   string
+	GameBuild     string
 }
 
 // Snapshot returns the current snapshot.
@@ -189,5 +263,7 @@ func (s *Session) Snapshot() Snapshot {
 		Docked:        s.docked,
 		StationName:   s.stationName,
 		MarketID:      s.marketID,
+		GameVersion:   s.gameVersion,
+		GameBuild:     s.gameBuild,
 	}
 }

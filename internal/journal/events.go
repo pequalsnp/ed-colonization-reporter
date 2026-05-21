@@ -10,6 +10,7 @@ import (
 // full journal spec defines hundreds of event types; we only care about the
 // ones below.
 const (
+	EventFileheader                    = "Fileheader"
 	EventCommander                     = "Commander"
 	EventLoadGame                      = "LoadGame"
 	EventLocation                      = "Location"
@@ -72,19 +73,36 @@ type CommanderEvent struct {
 	FID  string `json:"FID"`
 }
 
-// LoadGameEvent corresponds to the "LoadGame" journal event.
+// LoadGameEvent corresponds to the "LoadGame" journal event. The optional
+// Horizons/Odyssey fields tell us which DLCs are active — EDDN uploads
+// require this and the absence of either field must round-trip as
+// "unknown" (not false).
 type LoadGameEvent struct {
 	Envelope
 	Commander string `json:"Commander"`
 	FID       string `json:"FID"`
+	Horizons  *bool  `json:"Horizons,omitempty"`
+	Odyssey   *bool  `json:"Odyssey,omitempty"`
+	GameVersion string `json:"gameversion"`
+	GameBuild   string `json:"build"`
+}
+
+// FileheaderEvent is the first entry of every journal file; it carries the
+// game version/build strings, which EDDN uploaders are required to relay.
+type FileheaderEvent struct {
+	Envelope
+	GameVersion string `json:"gameversion"`
+	GameBuild   string `json:"build"`
 }
 
 // LocationLikeEvent covers Location/FSDJump/CarrierJump — events that report
-// the player's current star system, including its 64-bit address (id64).
+// the player's current star system, including its 64-bit address (id64) and
+// galactic coordinates.
 type LocationLikeEvent struct {
 	Envelope
-	StarSystem    string `json:"StarSystem"`
-	SystemAddress int64  `json:"SystemAddress"`
+	StarSystem    string     `json:"StarSystem"`
+	SystemAddress int64      `json:"SystemAddress"`
+	StarPos       [3]float64 `json:"StarPos"`
 }
 
 // DockedEvent corresponds to the "Docked" journal event.
@@ -167,12 +185,13 @@ type CarrierLocationEvent struct {
 // a jump — it's a Location-like event with carrier-specific fields.
 type CarrierJumpEvent struct {
 	Envelope
-	Docked        bool   `json:"Docked"`
-	StationName   string `json:"StationName"`
-	StationType   string `json:"StationType"`
-	MarketID      int64  `json:"MarketID"`
-	StarSystem    string `json:"StarSystem"`
-	SystemAddress int64  `json:"SystemAddress"`
+	Docked        bool       `json:"Docked"`
+	StationName   string     `json:"StationName"`
+	StationType   string     `json:"StationType"`
+	MarketID      int64      `json:"MarketID"`
+	StarSystem    string     `json:"StarSystem"`
+	SystemAddress int64      `json:"SystemAddress"`
+	StarPos       [3]float64 `json:"StarPos"`
 }
 
 // MarketEvent is the brief journal-side record that fires when the player
