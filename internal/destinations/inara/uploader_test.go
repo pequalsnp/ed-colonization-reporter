@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,9 +17,24 @@ import (
 )
 
 type serverCapture struct {
+	mu       sync.Mutex
 	requests []Request
 	respCode int
 	respBody string
+}
+
+func (c *serverCapture) record(r Request) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.requests = append(c.requests, r)
+}
+
+func (c *serverCapture) snapshot() []Request {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]Request, len(c.requests))
+	copy(out, c.requests)
+	return out
 }
 
 func newCaptureServer(t *testing.T, c *serverCapture) *httptest.Server {
@@ -37,7 +53,7 @@ func newCaptureServer(t *testing.T, c *serverCapture) *httptest.Server {
 			http.Error(w, "bad json", 400)
 			return
 		}
-		c.requests = append(c.requests, req)
+		c.record(req)
 		w.WriteHeader(c.respCode)
 		_, _ = w.Write([]byte(c.respBody))
 	}))
@@ -82,10 +98,11 @@ func TestUploader_EnqueuesThenFlushes(t *testing.T) {
 	if err := u.Flush(context.Background()); err != nil {
 		t.Fatalf("Flush: %v", err)
 	}
-	if len(c.requests) != 1 {
-		t.Fatalf("server saw %d requests, want 1", len(c.requests))
+	reqs := c.snapshot()
+	if len(reqs) != 1 {
+		t.Fatalf("server saw %d requests, want 1", len(reqs))
 	}
-	req := c.requests[0]
+	req := reqs[0]
 	if req.Header.APIKey != "test-key" || req.Header.CommanderName != "Jameson" {
 		t.Errorf("header wrong: %+v", req.Header)
 	}
@@ -118,8 +135,8 @@ func TestUploader_DoesNothingWithoutAPIKey(t *testing.T) {
 	if err := u.Flush(context.Background()); err != nil {
 		t.Fatalf("Flush: %v", err)
 	}
-	if len(c.requests) != 0 {
-		t.Errorf("should not have flushed without API key; saw %d requests", len(c.requests))
+	if got := len(c.snapshot()); got != 0 {
+		t.Errorf("should not have flushed without API key; saw %d requests", got)
 	}
 }
 
@@ -168,8 +185,14 @@ func TestUploader_BatchAccumulatesAcrossEvents(t *testing.T) {
 	if err := u.Flush(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(c.requests) != 1 || len(c.requests[0].Events) != 4 {
-		t.Errorf("batched call wrong: %d requests with first having %d events", len(c.requests), len(c.requests[0].Events))
+	reqs := c.snapshot()
+	if len(reqs) != 1 || len(reqs[0].Events) != 4 {
+		t.Errorf("batched call wrong: %d requests with first having %d events", len(reqs), func() int {
+			if len(reqs) == 0 {
+				return 0
+			}
+			return len(reqs[0].Events)
+		}())
 	}
 }
 
@@ -232,8 +255,10 @@ func TestUploader_BackgroundFlush(t *testing.T) {
 	}
 
 	deadline := time.After(2 * time.Second)
+	var reqs []Request
 	for {
-		if len(c.requests) > 0 {
+		reqs = c.snapshot()
+		if len(reqs) > 0 {
 			break
 		}
 		select {
@@ -242,8 +267,8 @@ func TestUploader_BackgroundFlush(t *testing.T) {
 		case <-time.After(20 * time.Millisecond):
 		}
 	}
-	if len(c.requests[0].Events) != 2 {
-		t.Errorf("first request events = %d", len(c.requests[0].Events))
+	if len(reqs[0].Events) != 2 {
+		t.Errorf("first request events = %d", len(reqs[0].Events))
 	}
 }
 
