@@ -31,6 +31,10 @@ import (
 // DefaultEndpoint is the EDDN live upload URL, including the non-standard port.
 const DefaultEndpoint = "https://eddn.edcd.io:4430/upload/"
 
+// BetaEndpoint is the EDDN beta gateway, used together with TestMode for
+// integration testing. Messages posted here do not reach live subscribers.
+const BetaEndpoint = "https://beta.eddn.edcd.io:4431/upload/"
+
 // SoftwareID identifies our uploader in the EDDN header so EDDN operators
 // can correlate bad uploads back to the source software.
 type SoftwareID struct {
@@ -53,6 +57,10 @@ type Uploader struct {
 	HTTPClient *http.Client
 	// ReadMarket overrides the Market.json loader (tests).
 	ReadMarket MarketReader
+	// TestMode appends `/test` to every schemaRef so EDDN's gateway runs
+	// validation without broadcasting to live consumers. Combine with
+	// `Endpoint = BetaEndpoint` for full beta-network integration tests.
+	TestMode bool
 
 	enabled atomic.Bool
 	// OnStatus, if set, receives user-visible status updates (success/skip/error).
@@ -150,6 +158,9 @@ func (u *Uploader) uploadMarket(ctx context.Context, raw journal.Raw) error {
 // send wraps the message in the EDDN envelope and POSTs it.
 func (u *Uploader) send(ctx context.Context, schemaRef string, message map[string]any) error {
 	gv, gb := u.Session.GameVersion()
+	if u.TestMode {
+		schemaRef += "/test"
+	}
 	envelope := map[string]any{
 		"$schemaRef": schemaRef,
 		"header": map[string]any{

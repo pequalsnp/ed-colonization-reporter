@@ -12,7 +12,8 @@ import (
 
 // discardEndpoint returns the journal events EDSM tells clients to drop.
 // The list is curated server-side so that EDMC-style clients don't flood
-// the API with noise that EDSM doesn't store.
+// the API with noise that EDSM doesn't store. Tests can override via
+// RefreshFrom.
 const discardEndpoint = "https://www.edsm.net/api-journal-v1/discard"
 
 // discardSet tracks the events EDSM wants us to skip. Safe for concurrent use.
@@ -45,7 +46,13 @@ func (d *discardSet) Fetched() bool {
 // Refresh fetches the latest discard list. EDMC overrides the EDSM-supplied
 // list by always re-enabling "Docked" — we follow that convention.
 func (d *discardSet) Refresh(ctx context.Context, hc *http.Client) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, discardEndpoint, nil)
+	return d.RefreshFrom(ctx, hc, discardEndpoint)
+}
+
+// RefreshFrom is Refresh with a configurable URL. Used by tests that point
+// at httptest.Server; production code calls Refresh.
+func (d *discardSet) RefreshFrom(ctx context.Context, hc *http.Client, url string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
 	}

@@ -272,6 +272,59 @@ func TestUploader_BackgroundFlush(t *testing.T) {
 	}
 }
 
+func TestUploader_EmptyFlushIsNoop(t *testing.T) {
+	sess := state.New()
+	sess.SetCommander("Jameson", "F1")
+	c := &serverCapture{}
+	u := setupEnabled(t, sess, c)
+	if err := u.Flush(context.Background()); err != nil {
+		t.Fatalf("Flush on empty queue: %v", err)
+	}
+	if len(c.snapshot()) != 0 {
+		t.Error("empty Flush should not hit the server")
+	}
+}
+
+func TestUploader_HeaderIncludesFID(t *testing.T) {
+	sess := state.New()
+	sess.SetCommander("Jameson", "F1234567")
+	c := &serverCapture{}
+	u := setupEnabled(t, sess, c)
+	_ = u.HandleEvent(context.Background(), raw(t, journal.EventFSDJump, map[string]any{
+		"StarSystem": "Sol", "StarPos": []any{0, 0, 0},
+	}))
+	if err := u.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	reqs := c.snapshot()
+	if len(reqs) != 1 || reqs[0].Header.CommanderFrontierID != "F1234567" {
+		t.Errorf("FID missing/wrong in header: %+v", reqs)
+	}
+}
+
+func TestUploader_DisabledFlushIsNoop(t *testing.T) {
+	sess := state.New()
+	sess.SetCommander("Jameson", "F1")
+	c := &serverCapture{}
+	u := setupEnabled(t, sess, c)
+
+	// Enqueue some work, then disable, then flush.
+	_ = u.HandleEvent(context.Background(), raw(t, journal.EventFSDJump, map[string]any{
+		"StarSystem": "Sol", "StarPos": []any{0, 0, 0},
+	}))
+	u.SetEnabled(false)
+	if err := u.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(c.snapshot()) != 0 {
+		t.Errorf("disabled Flush should be no-op")
+	}
+	// Queue should be preserved so a subsequent re-enable + flush works.
+	if u.QueueLen() != 2 {
+		t.Errorf("queue should be preserved while disabled; got %d", u.QueueLen())
+	}
+}
+
 func TestUploader_HeaderAuthFailDoesNotRetry(t *testing.T) {
 	sess := state.New()
 	sess.SetCommander("Jameson", "F1")

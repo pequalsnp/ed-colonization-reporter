@@ -13,6 +13,28 @@ import (
 	"github.com/pequalsnp/ed-colonization-reporter/internal/state"
 )
 
+func TestLevel_String(t *testing.T) {
+	cases := map[Level]string{
+		LevelInfo:  "INFO",
+		LevelOK:    "OK",
+		LevelWarn:  "WARN",
+		LevelError: "ERROR",
+		Level(99):  "INFO", // unknown falls back to INFO
+	}
+	for lvl, want := range cases {
+		if got := lvl.String(); got != want {
+			t.Errorf("Level(%d).String() = %q, want %q", lvl, got, want)
+		}
+	}
+}
+
+func TestReporter_Name(t *testing.T) {
+	r := New(&fakeAPI{}, state.New())
+	if r.Name() != "ravencolonial" {
+		t.Errorf("Name = %q, want ravencolonial", r.Name())
+	}
+}
+
 func TestHandleCarrierStats_RegistersAndPublishes(t *testing.T) {
 	sess := state.New()
 	api := &fakeAPI{}

@@ -156,6 +156,10 @@ func (s *Server) initSessionAndReporter() error {
 	s.eddn.JournalDir = resolveJournalDir(s.cfg.JournalDir)
 	s.eddn.OnStatus = statusBridge
 	s.eddn.SetEnabled(s.cfg.EDDNEnabled)
+	if s.cfg.EDDNTestMode {
+		s.eddn.TestMode = true
+		s.eddn.Endpoint = eddn.BetaEndpoint
+	}
 
 	s.edsm = edsm.New(edsm.SoftwareID{Name: "edcolreport", Version: s.Version}, s.session)
 	s.edsm.OnStatus = statusBridge

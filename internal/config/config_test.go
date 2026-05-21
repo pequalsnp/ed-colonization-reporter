@@ -24,6 +24,12 @@ func TestSaveLoad_Roundtrip(t *testing.T) {
 		APIKey:            "secret-key",
 		CommanderOverride: "Alt-Cmdr",
 		ReplaySession:     true,
+		EDDNEnabled:       true,
+		EDDNTestMode:      true,
+		EDSMEnabled:       true,
+		EDSMAPIKey:        "edsm-key-xyz",
+		InaraEnabled:      true,
+		InaraAPIKey:       "inara-key-xyz",
 	}
 	if err := SaveTo(want, path); err != nil {
 		t.Fatalf("SaveTo: %v", err)
@@ -34,6 +40,25 @@ func TestSaveLoad_Roundtrip(t *testing.T) {
 	}
 	if got != want {
 		t.Errorf("roundtrip mismatch:\n got %+v\nwant %+v", got, want)
+	}
+}
+
+func TestLoadFrom_OldConfigStillLoadsWithDefaults(t *testing.T) {
+	// A config written by a previous version (no destination toggles)
+	// should still load with the new fields zero-valued.
+	path := filepath.Join(t.TempDir(), "old.toml")
+	if err := os.WriteFile(path, []byte(`journal_dir = "/foo"`+"\n"+`api_key = "k"`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, existed, err := LoadFrom(path)
+	if err != nil || !existed {
+		t.Fatalf("LoadFrom: %v existed=%v", err, existed)
+	}
+	if got.JournalDir != "/foo" || got.APIKey != "k" {
+		t.Errorf("legacy fields wrong: %+v", got)
+	}
+	if got.EDDNEnabled || got.EDSMEnabled || got.InaraEnabled {
+		t.Errorf("new toggles should default false; got %+v", got)
 	}
 }
 

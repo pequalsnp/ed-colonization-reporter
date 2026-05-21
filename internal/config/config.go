@@ -45,6 +45,10 @@ type Config struct {
 	// EDDNEnabled turns on uploads to the EDDN community data network
 	// (https://eddn.edcd.io). Default off so users opt in explicitly.
 	EDDNEnabled bool `toml:"eddn_enabled"`
+	// EDDNTestMode points the EDDN uploader at the beta network and
+	// appends `/test` to every schemaRef so messages are validated but
+	// not broadcast. Developer/staging toggle.
+	EDDNTestMode bool `toml:"eddn_test_mode"`
 
 	// EDSMEnabled and EDSMAPIKey control journal uploads to EDSM
 	// (https://www.edsm.net). API key from https://www.edsm.net/en/settings/api.
