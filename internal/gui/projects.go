@@ -26,6 +26,10 @@ type projectsPanel struct {
 	rows      []ravencolonial.Project
 	commander string
 	err       string
+	// expanded tracks which build IDs are currently expanded to show
+	// the full commodity breakdown. Survives rerenders so refreshing
+	// the list doesn't collapse the user's drilldown.
+	expanded map[string]bool
 
 	summary *canvas.Text
 	refresh *widget.Button
@@ -35,7 +39,7 @@ type projectsPanel struct {
 }
 
 func newProjectsPanel(srv *web.Server) *projectsPanel {
-	p := &projectsPanel{srv: srv}
+	p := &projectsPanel{srv: srv, expanded: map[string]bool{}}
 	p.summary = canvas.NewText("Loading…", edFgMuted)
 	p.summary.TextSize = 12
 	p.refresh = widget.NewButtonWithIcon("Refresh", theme.ViewRefreshIcon(), func() { go p.refreshNow() })
@@ -126,16 +130,31 @@ func (p *projectsPanel) rerender() {
 			p.empty.Hide()
 		}
 		for _, r := range rows {
-			p.cards.Add(buildProjectCard(r))
+			r := r
+			isExpanded := p.expanded[r.BuildID]
+			p.cards.Add(p.buildProjectCard(r, isExpanded))
 		}
 		p.cards.Refresh()
 	})
 }
 
+// toggleExpansion flips the expand/collapse state of a project card
+// and triggers a re-render.
+func (p *projectsPanel) toggleExpansion(buildID string) {
+	if buildID == "" {
+		return
+	}
+	p.mu.Lock()
+	p.expanded[buildID] = !p.expanded[buildID]
+	p.mu.Unlock()
+	p.rerender()
+}
+
 // buildProjectCard renders one project as a self-contained card with
 // system, build name, status badge, progress bar, outstanding count,
-// and the top outstanding commodities.
-func buildProjectCard(p ravencolonial.Project) fyne.CanvasObject {
+// and the top outstanding commodities. When expanded, the full
+// commodity list replaces the top-5 line.
+func (panel *projectsPanel) buildProjectCard(p ravencolonial.Project, expanded bool) fyne.CanvasObject {
 	systemName := p.SystemName
 	if systemName == "" {
 		systemName = "(unknown system)"
@@ -178,13 +197,38 @@ func buildProjectCard(p ravencolonial.Project) fyne.CanvasObject {
 
 	body := container.NewVBox(bar, summary)
 	if outstanding > 0 {
-		body.Add(commoditiesLine(p.Commodities))
+		if expanded {
+			body.Add(allCommoditiesGrid(p.Commodities))
+		} else {
+			body.Add(commoditiesLine(p.Commodities))
+		}
 	}
 
-	card := container.NewVBox(
+	// Expand/collapse toggle. Only shown when there's something worth
+	// expanding (more commodities than fit in the top-N line).
+	var toggle fyne.CanvasObject
+	if countOutstanding(p.Commodities) > 5 {
+		icon := theme.MenuDropDownIcon()
+		label := "Show all commodities"
+		if expanded {
+			icon = theme.MenuDropUpIcon()
+			label = "Show fewer"
+		}
+		btn := widget.NewButtonWithIcon(label, icon, func() {
+			panel.toggleExpansion(p.BuildID)
+		})
+		btn.Importance = widget.LowImportance
+		toggle = btn
+	}
+
+	cardChildren := []fyne.CanvasObject{
 		container.NewPadded(header),
 		container.NewPadded(body),
-	)
+	}
+	if toggle != nil {
+		cardChildren = append(cardChildren, container.NewPadded(toggle))
+	}
+	card := container.NewVBox(cardChildren...)
 
 	// Card-style frame: subtle rounded background.
 	bg := canvas.NewRectangle(edBgRaised)
@@ -192,6 +236,40 @@ func buildProjectCard(p ravencolonial.Project) fyne.CanvasObject {
 	bg.StrokeColor = edBorder
 	bg.StrokeWidth = 1
 	return container.NewPadded(container.NewStack(bg, card))
+}
+
+// allCommoditiesGrid renders every outstanding commodity sorted by
+// quantity desc. Two columns wide so 20+ commodities don't make the
+// card absurdly tall.
+func allCommoditiesGrid(commodities map[string]int) fyne.CanvasObject {
+	entries := topCommodities(commodities, 1000) // effectively "all"
+	if len(entries) == 0 {
+		return container.NewWithoutLayout()
+	}
+	rows := container.New(layout.NewGridLayout(2))
+	for _, c := range entries {
+		qty := canvas.NewText(fmt.Sprintf("%s", humanCount(c.Count)), edFg)
+		qty.TextSize = 12
+		qty.TextStyle = fyne.TextStyle{Bold: true, Monospace: true}
+		name := canvas.NewText(PrettifyCommodity(c.Symbol), edFgMuted)
+		name.TextSize = 12
+		// Use a fixed-width container for the qty column so names line up.
+		qtyCell := container.NewGridWrap(fyne.NewSize(64, 18), qty)
+		row := container.NewHBox(qtyCell, name)
+		rows.Add(row)
+	}
+	return rows
+}
+
+// countOutstanding returns how many commodities have outstanding > 0.
+func countOutstanding(m map[string]int) int {
+	n := 0
+	for _, v := range m {
+		if v > 0 {
+			n++
+		}
+	}
+	return n
 }
 
 // commoditiesLine renders the top outstanding commodities as a compact
