@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ED Colonization Reporter — Auth Callback</title>
+  <style>
+    body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background: #16161a; color: #e0e0e0; padding: 40px 20px; max-width: 640px; margin: 0 auto; line-height: 1.5; }
+    h1 { font-size: 18px; font-weight: 600; color: #6fa9ff; margin: 0 0 16px; }
+    .status { font-size: 14px; color: #9ca0a8; margin: 16px 0; }
+    .err { color: #ff6b6b; padding: 12px 16px; background: #2a1414; border: 1px solid #5a2424; border-radius: 4px; font-size: 13px; }
+    .ok  { color: #6bd587; padding: 12px 16px; background: #142a18; border: 1px solid #245a30; border-radius: 4px; font-size: 13px; }
+    code { font-family: ui-monospace, Menlo, Consolas, monospace; background: #1f1f25; padding: 2px 6px; border-radius: 3px; font-size: 12.5px; }
+    pre { background: #1f1f25; padding: 12px; border-radius: 4px; overflow-x: auto; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <h1>ED Colonization Reporter — Frontier Sign-In</h1>
+  <div id="status" class="status">Forwarding the auth code to your local app…</div>
+  <div id="details"></div>
+  <p class="status" style="margin-top: 32px; font-size: 12px;">
+    This static page exists only because Frontier's OAuth endpoint requires
+    an <code>https://</code> redirect. It receives the auth code from
+    Frontier and forwards it to <code>http://localhost:&lt;port&gt;</code>
+    where the desktop app is listening. No code or tokens are stored or
+    transmitted anywhere else. Source:
+    <a href="https://github.com/pequalsnp/ed-colonization-reporter/blob/main/docs/auth.html" style="color:#6fa9ff">github.com/pequalsnp/ed-colonization-reporter</a>.
+  </p>
+  <script>
+    (function() {
+      const statusEl  = document.getElementById('status');
+      const detailsEl = document.getElementById('details');
+
+      function fail(msg, body) {
+        statusEl.textContent = '';
+        const box = document.createElement('div');
+        box.className = 'err';
+        box.textContent = msg;
+        detailsEl.appendChild(box);
+        if (body) {
+          const pre = document.createElement('pre');
+          pre.textContent = body;
+          detailsEl.appendChild(pre);
+        }
+      }
+
+      function ok(msg) {
+        statusEl.textContent = '';
+        const box = document.createElement('div');
+        box.className = 'ok';
+        box.textContent = msg;
+        detailsEl.appendChild(box);
+      }
+
+      const params = new URLSearchParams(window.location.search);
+      const error = params.get('error');
+      if (error) {
+        fail('Frontier reported an authorization error: ' + error,
+             params.get('error_description') || '');
+        return;
+      }
+
+      const code  = params.get('code');
+      const state = params.get('state');
+      if (!code || !state) {
+        fail('Missing code or state parameter from Frontier.');
+        return;
+      }
+
+      // The app encodes its localhost port inside `state` as
+      // base64url(JSON{port, csrf}). We extract the port to know where
+      // to forward; the app validates csrf on its side.
+      let port = null;
+      try {
+        let s = state.replace(/-/g, '+').replace(/_/g, '/');
+        const pad = (4 - (s.length % 4)) % 4;
+        s += '='.repeat(pad);
+        const decoded = JSON.parse(atob(s));
+        const p = parseInt(decoded.port, 10);
+        if (Number.isInteger(p) && p > 0 && p < 65536) {
+          port = p;
+        }
+      } catch (e) {
+        // Fall through to manual-paste fallback below.
+      }
+
+      if (port === null) {
+        statusEl.textContent = '';
+        const wrap = document.createElement('div');
+        wrap.className = 'err';
+        wrap.textContent =
+          'Could not decode the local port from the OAuth state. The app may ' +
+          'have started a new sign-in flow without this page knowing about it. ' +
+          'Copy the values below and paste them into the app manually.';
+        detailsEl.appendChild(wrap);
+        const pre = document.createElement('pre');
+        pre.textContent = 'code=' + code + '\nstate=' + state;
+        detailsEl.appendChild(pre);
+        return;
+      }
+
+      const dest = 'http://localhost:' + port + '/frontier/callback?' +
+                   'code=' + encodeURIComponent(code) +
+                   '&state=' + encodeURIComponent(state);
+
+      ok('Authorized — forwarding to your app on port ' + port + '. ' +
+         'You can close this tab once the app shows "signed in".');
+      // Tiny delay so the user sees the success message before the redirect.
+      setTimeout(function() { window.location.href = dest; }, 250);
+    })();
+  </script>
+</body>
+</html>
