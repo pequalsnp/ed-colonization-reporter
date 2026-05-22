@@ -53,6 +53,8 @@ type App struct {
 	tabs         *container.AppTabs
 	activityTab  *container.TabItem
 	unreadErrors int
+
+	trayDesk desktop.App
 }
 
 // Run starts the Fyne app and blocks until the window is closed.
@@ -124,25 +126,6 @@ func (a *App) show(ctx context.Context) {
 	// Menubar — gives the app a real Quit / About / Shortcuts entry point.
 	a.window.SetMainMenu(a.buildMenu(tabs))
 
-	// System tray (KDE app indicator / GNOME tray / Win32 systray) —
-	// keep the app reachable from the system tray after the user
-	// closes the window. Available only on desktop drivers; the cast
-	// is the documented Fyne way to feature-detect.
-	if desk, ok := a.app.(desktop.App); ok {
-		trayMenu := fyne.NewMenu("ED Colonization Reporter",
-			fyne.NewMenuItem("Show", func() {
-				a.window.Show()
-				a.window.RequestFocus()
-			}),
-			fyne.NewMenuItemSeparator(),
-			fyne.NewMenuItem("Refresh projects", func() { a.projects.refreshNow() }),
-			fyne.NewMenuItemSeparator(),
-			fyne.NewMenuItem("Quit", func() { a.app.Quit() }),
-		)
-		desk.SetSystemTrayMenu(trayMenu)
-		desk.SetSystemTrayIcon(appIcon())
-	}
-
 	// Close-to-tray: closing the window hides it rather than quitting,
 	// matching common KDE/EDMC behaviour. Use Ctrl+Q or the tray menu
 	// to actually exit.
@@ -174,6 +157,16 @@ func (a *App) show(ctx context.Context) {
 		}
 		cancel()
 	})
+
+	// System tray (KDE app indicator / GNOME tray / Win32 systray) —
+	// keep the app reachable from the system tray after the user closes
+	// the window. Available only on desktop drivers.
+	if desk, ok := a.app.(desktop.App); ok {
+		a.trayDesk = desk
+		desk.SetSystemTrayIcon(appIcon())
+		a.refreshTrayMenu()
+		go a.runTrayUpdater(subCtx)
+	}
 
 	go a.runStatusBarLoop(subCtx)
 	go a.runActivityLoop(subCtx)
@@ -517,6 +510,81 @@ func (a *App) runUpdateCheckNow() {
 		dlg.Show()
 	})
 }
+
+// runTrayUpdater periodically rebuilds the tray menu so the live
+// status header (commander / projects / last event) is current.
+func (a *App) runTrayUpdater(ctx context.Context) {
+	t := time.NewTicker(15 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			a.refreshTrayMenu()
+		}
+	}
+}
+
+// refreshTrayMenu rebuilds the tray icon's menu with a snapshot of the
+// current session state. Disabled menu items act as read-only labels.
+func (a *App) refreshTrayMenu() {
+	if a.trayDesk == nil {
+		return
+	}
+	snap := a.srv.Session().Snapshot()
+	cmdrLine := "Not connected"
+	if snap.Commander != "" {
+		cmdrLine = "Cmdr " + snap.Commander
+		if snap.StarSystem != "" {
+			cmdrLine += " · " + snap.StarSystem
+		}
+	}
+
+	eventLine := "No journal events yet"
+	if t := a.srv.LastEventAt(); !t.IsZero() {
+		eventLine = "Last journal event: " + humanAge(time.Since(t))
+	}
+
+	projLine := "Projects loading…"
+	if a.projects != nil {
+		a.projects.mu.Lock()
+		count := len(a.projects.rows)
+		a.projects.mu.Unlock()
+		switch count {
+		case 0:
+			projLine = "No active projects"
+		case 1:
+			projLine = "1 active project"
+		default:
+			projLine = fmt.Sprintf("%d active projects", count)
+		}
+	}
+
+	header := fyne.NewMenuItem(cmdrLine, nil)
+	header.Disabled = true
+	eventItem := fyne.NewMenuItem(eventLine, nil)
+	eventItem.Disabled = true
+	projItem := fyne.NewMenuItem(projLine, nil)
+	projItem.Disabled = true
+
+	menu := fyne.NewMenu("ED Colonization Reporter",
+		header, eventItem, projItem,
+		fyne.NewMenuItemSeparator(),
+		fyne.NewMenuItem("Show window", func() {
+			a.window.Show()
+			a.window.RequestFocus()
+		}),
+		fyne.NewMenuItem("Refresh projects", func() { a.projects.refreshNow() }),
+		fyne.NewMenuItem("Refresh FC inventory", func() { a.srv.ForceFCSync() }),
+		fyne.NewMenuItemSeparator(),
+		fyne.NewMenuItem("Quit", func() { a.app.Quit() }),
+	)
+	fyne.Do(func() { a.trayDesk.SetSystemTrayMenu(menu) })
+}
+
+// humanAge is in destbar.go; re-declared here would shadow that.
+// We rely on the package-level definition.
 
 // registerShortcuts wires standard desktop keyboard shortcuts. Fyne's
 // Canvas.AddShortcut handles the cross-platform Ctrl/Cmd modifier
