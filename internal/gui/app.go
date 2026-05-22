@@ -60,7 +60,19 @@ func newApp(srv *web.Server) *App {
 	a.app.SetIcon(appIcon())
 	a.window = a.app.NewWindow("ED Colonization Reporter")
 	a.window.SetIcon(appIcon())
-	a.window.Resize(fyne.NewSize(960, 720))
+
+	// Restore the last-used window size from preferences. Defaults to
+	// a reasonable starting size on first launch.
+	prefs := a.app.Preferences()
+	width := float32(prefs.FloatWithFallback("window.width", 960))
+	height := float32(prefs.FloatWithFallback("window.height", 720))
+	if width < 480 {
+		width = 960
+	}
+	if height < 360 {
+		height = 720
+	}
+	a.window.Resize(fyne.NewSize(width, height))
 	return a
 }
 
@@ -79,6 +91,15 @@ func (a *App) show(ctx context.Context) {
 	)
 	tabs.SetTabLocation(container.TabLocationTop)
 
+	// Restore last-active tab + persist on every switch.
+	prefs := a.app.Preferences()
+	if idx := prefs.IntWithFallback("window.activeTab", 0); idx >= 0 && idx < len(tabs.Items) {
+		tabs.SelectIndex(idx)
+	}
+	tabs.OnSelected = func(_ *container.TabItem) {
+		prefs.SetInt("window.activeTab", tabs.SelectedIndex())
+	}
+
 	// Thin orange divider line under the status bar — same trick the ED
 	// in-game HUD uses to separate header from body.
 	topDivider := canvas.NewRectangle(edOrange)
@@ -93,6 +114,15 @@ func (a *App) show(ctx context.Context) {
 
 	subCtx, cancel := context.WithCancel(ctx)
 	a.window.SetOnClosed(func() {
+		// Persist the window size for next launch. Fyne doesn't expose
+		// the window's screen position cross-platform (X11/Wayland/Win
+		// behave differently and not all WMs allow setting it), so we
+		// only round-trip the size.
+		if c := a.window.Canvas(); c != nil {
+			sz := c.Size()
+			prefs.SetFloat("window.width", float64(sz.Width))
+			prefs.SetFloat("window.height", float64(sz.Height))
+		}
 		cancel()
 		a.app.Quit()
 	})
