@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -31,6 +32,9 @@ type projectsPanel struct {
 	// the list doesn't collapse the user's drilldown.
 	expanded map[string]bool
 
+	search *widget.Entry
+	filter string
+
 	summary *canvas.Text
 	refresh *widget.Button
 	cards   *fyne.Container
@@ -44,6 +48,14 @@ func newProjectsPanel(srv *web.Server) *projectsPanel {
 	p.summary.TextSize = 12
 	p.refresh = widget.NewButtonWithIcon("Refresh", theme.ViewRefreshIcon(), func() { go p.refreshNow() })
 	p.refresh.Importance = widget.MediumImportance
+	p.search = widget.NewEntry()
+	p.search.SetPlaceHolder("Filter by system or build name…")
+	p.search.OnChanged = func(text string) {
+		p.mu.Lock()
+		p.filter = strings.TrimSpace(strings.ToLower(text))
+		p.mu.Unlock()
+		p.rerender()
+	}
 	p.cards = container.NewVBox()
 	p.scroll = container.NewVScroll(p.cards)
 
@@ -60,7 +72,11 @@ func newProjectsPanel(srv *web.Server) *projectsPanel {
 }
 
 func (p *projectsPanel) content() fyne.CanvasObject {
-	top := container.NewBorder(nil, nil, p.summary, p.refresh, layout.NewSpacer())
+	summaryRow := container.NewBorder(nil, nil, p.summary, p.refresh, layout.NewSpacer())
+	// Search icon prefix on the entry so it reads as a filter, not a label.
+	searchPrefix := widget.NewIcon(theme.SearchIcon())
+	searchRow := container.NewBorder(nil, nil, container.NewPadded(searchPrefix), nil, p.search)
+	top := container.NewVBox(summaryRow, searchRow)
 	stack := container.NewStack(p.scroll, p.empty)
 	return container.NewBorder(
 		container.NewPadded(top),
@@ -107,7 +123,10 @@ func (p *projectsPanel) rerender() {
 	rows := append([]ravencolonial.Project(nil), p.rows...)
 	cmdr := p.commander
 	errMsg := p.err
+	filter := p.filter
 	p.mu.Unlock()
+
+	filtered := filterProjects(rows, filter)
 
 	fyne.Do(func() {
 		switch {
@@ -117,6 +136,10 @@ func (p *projectsPanel) rerender() {
 		case cmdr == "":
 			p.summary.Text = "Commander unknown — start Elite Dangerous to populate."
 			p.summary.Color = edFgMuted
+		case filter != "":
+			p.summary.Text = fmt.Sprintf("%d of %d project%s match — Cmdr %s",
+				len(filtered), len(rows), plural(len(rows)), cmdr)
+			p.summary.Color = edFgMuted
 		default:
 			p.summary.Text = fmt.Sprintf("%d active project%s — Cmdr %s", len(rows), plural(len(rows)), cmdr)
 			p.summary.Color = edFgMuted
@@ -124,18 +147,35 @@ func (p *projectsPanel) rerender() {
 		p.summary.Refresh()
 
 		p.cards.RemoveAll()
-		if len(rows) == 0 && errMsg == "" {
+		if len(filtered) == 0 && errMsg == "" {
 			p.empty.Show()
 		} else {
 			p.empty.Hide()
 		}
-		for _, r := range rows {
+		for _, r := range filtered {
 			r := r
 			isExpanded := p.expanded[r.BuildID]
 			p.cards.Add(p.buildProjectCard(r, isExpanded))
 		}
 		p.cards.Refresh()
 	})
+}
+
+// filterProjects applies the case-insensitive search filter to the list,
+// matching against system name and build name. An empty filter returns
+// the input unchanged.
+func filterProjects(rows []ravencolonial.Project, filter string) []ravencolonial.Project {
+	if filter == "" {
+		return rows
+	}
+	out := make([]ravencolonial.Project, 0, len(rows))
+	for _, r := range rows {
+		hay := strings.ToLower(r.SystemName + " " + r.BuildName)
+		if strings.Contains(hay, filter) {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // toggleExpansion flips the expand/collapse state of a project card
