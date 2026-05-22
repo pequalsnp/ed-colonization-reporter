@@ -9,6 +9,7 @@ package gui
 
 import (
 	"context"
+	"fmt"
 	"image/color"
 	"net/url"
 	"strings"
@@ -48,6 +49,10 @@ type App struct {
 	settings      *settingsPanel
 	frontierPanel *frontierPanel
 	destBar       *destBar
+
+	tabs         *container.AppTabs
+	activityTab  *container.TabItem
+	unreadErrors int
 }
 
 // Run starts the Fyne app and blocks until the window is closed.
@@ -90,21 +95,26 @@ func (a *App) show(ctx context.Context) {
 	a.frontierPanel = newFrontierPanel(a.srv)
 	a.destBar = newDestBar(a.srv)
 
-	tabs := container.NewAppTabs(
-		container.NewTabItemWithIcon("Projects", theme.GridIcon(), a.projects.content()),
-		container.NewTabItemWithIcon("Activity", theme.HistoryIcon(), a.activity.content()),
-		container.NewTabItemWithIcon("Settings", theme.SettingsIcon(), a.settings.content(a.frontierPanel)),
-	)
-	tabs.SetTabLocation(container.TabLocationTop)
+	projectsTab := container.NewTabItemWithIcon("Projects", theme.GridIcon(), a.projects.content())
+	a.activityTab = container.NewTabItemWithIcon("Activity", theme.HistoryIcon(), a.activity.content())
+	settingsTab := container.NewTabItemWithIcon("Settings", theme.SettingsIcon(), a.settings.content(a.frontierPanel))
+	a.tabs = container.NewAppTabs(projectsTab, a.activityTab, settingsTab)
+	a.tabs.SetTabLocation(container.TabLocationTop)
 
-	// Restore last-active tab + persist on every switch.
+	// Restore last-active tab + persist on every switch. Switching to
+	// the activity tab also resets the unread-errors counter.
 	prefs := a.app.Preferences()
-	if idx := prefs.IntWithFallback("window.activeTab", 0); idx >= 0 && idx < len(tabs.Items) {
-		tabs.SelectIndex(idx)
+	if idx := prefs.IntWithFallback("window.activeTab", 0); idx >= 0 && idx < len(a.tabs.Items) {
+		a.tabs.SelectIndex(idx)
 	}
-	tabs.OnSelected = func(_ *container.TabItem) {
-		prefs.SetInt("window.activeTab", tabs.SelectedIndex())
+	a.tabs.OnSelected = func(item *container.TabItem) {
+		prefs.SetInt("window.activeTab", a.tabs.SelectedIndex())
+		if item == a.activityTab {
+			a.unreadErrors = 0
+			a.refreshActivityTabTitle()
+		}
 	}
+	tabs := a.tabs
 
 	// Keyboard shortcuts — standard desktop conventions.
 	a.registerShortcuts(tabs)
@@ -220,6 +230,29 @@ func (a *App) maybeNotify(s reporter.Status) {
 	case s.Level == reporter.LevelError && strings.HasPrefix(s.Message, "Tailer exited:"):
 		a.notify("Journal tail stopped", s.Message)
 	}
+	// Bump unread-error counter on errors arriving while the user isn't
+	// on the Activity tab, so the tab title shows the urgency.
+	if s.Level == reporter.LevelError && a.tabs != nil && a.tabs.Selected() != a.activityTab {
+		a.unreadErrors++
+		a.refreshActivityTabTitle()
+	}
+}
+
+// refreshActivityTabTitle rewrites the Activity tab title to include
+// "(N)" when there are unread errors. Must be called from the UI thread
+// (or via fyne.Do).
+func (a *App) refreshActivityTabTitle() {
+	if a.activityTab == nil || a.tabs == nil {
+		return
+	}
+	text := "Activity"
+	if a.unreadErrors > 0 {
+		text = fmt.Sprintf("Activity (%d)", a.unreadErrors)
+	}
+	fyne.Do(func() {
+		a.activityTab.Text = text
+		a.tabs.Refresh()
+	})
 }
 
 func (a *App) notify(title, body string) {
