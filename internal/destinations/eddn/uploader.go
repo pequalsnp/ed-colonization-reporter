@@ -123,7 +123,35 @@ func (u *Uploader) uploadJournal(ctx context.Context, raw journal.Raw) error {
 	if msg == nil {
 		return nil
 	}
-	return u.send(ctx, schemaJournalV1, msg)
+	return u.send(ctx, schemaJournalV1, msg, journalDescription(raw.Event, msg))
+}
+
+// journalDescription builds a human label for the status feed —
+// "FSDJump → Sol" or "Docked at Abraham Lincoln (Sol)" — so the
+// Activity tab tells the user WHAT was posted, not just the schema.
+func journalDescription(eventName string, msg map[string]any) string {
+	system, _ := msg["StarSystem"].(string)
+	switch eventName {
+	case journal.EventFSDJump, journal.EventCarrierJump:
+		if system != "" {
+			return fmt.Sprintf("%s → %s", eventName, system)
+		}
+	case journal.EventDocked:
+		station, _ := msg["StationName"].(string)
+		switch {
+		case station != "" && system != "":
+			return fmt.Sprintf("Docked at %s (%s)", station, system)
+		case station != "":
+			return fmt.Sprintf("Docked at %s", station)
+		case system != "":
+			return fmt.Sprintf("Docked in %s", system)
+		}
+	case journal.EventLocation:
+		if system != "" {
+			return fmt.Sprintf("Location: %s", system)
+		}
+	}
+	return eventName
 }
 
 func (u *Uploader) uploadMarket(ctx context.Context, raw journal.Raw) error {
@@ -152,11 +180,15 @@ func (u *Uploader) uploadMarket(ctx context.Context, raw journal.Raw) error {
 	if msg == nil {
 		return nil // empty or all-filtered commodity list
 	}
-	return u.send(ctx, schemaCommodityV3, msg)
+	commodities, _ := msg["commodities"].([]map[string]any)
+	label := fmt.Sprintf("commodities for %s (%d items)", mf.StationName, len(commodities))
+	return u.send(ctx, schemaCommodityV3, msg, label)
 }
 
-// send wraps the message in the EDDN envelope and POSTs it.
-func (u *Uploader) send(ctx context.Context, schemaRef string, message map[string]any) error {
+// send wraps the message in the EDDN envelope and POSTs it. label is a
+// human description of what's being uploaded (e.g. "FSDJump → Sol")
+// surfaced in the Activity tab on success.
+func (u *Uploader) send(ctx context.Context, schemaRef string, message map[string]any, label string) error {
 	gv, gb := u.Session.GameVersion()
 	if u.TestMode {
 		schemaRef += "/test"
@@ -193,7 +225,11 @@ func (u *Uploader) send(ctx context.Context, schemaRef string, message map[strin
 		u.status("ERROR", err.Error())
 		return err
 	}
-	u.status("OK", fmt.Sprintf("EDDN: posted %s", shortSchema(schemaRef)))
+	if label != "" {
+		u.status("OK", fmt.Sprintf("EDDN: posted %s — %s", shortSchema(schemaRef), label))
+	} else {
+		u.status("OK", fmt.Sprintf("EDDN: posted %s", shortSchema(schemaRef)))
+	}
 	return nil
 }
 

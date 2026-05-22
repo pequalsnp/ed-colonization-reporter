@@ -71,11 +71,15 @@ func newActivityPanel() *activityPanel {
 			level.TextSize = 12
 			level.TextStyle = fyne.TextStyle{Bold: true, Monospace: true}
 
+			source := canvas.NewText("[ ----- ]", edFgDim)
+			source.TextSize = 12
+			source.TextStyle = fyne.TextStyle{Bold: true, Monospace: true}
+
 			msg := canvas.NewText("template message", edFg)
 			msg.TextSize = 12
 			msg.TextStyle = fyne.TextStyle{Monospace: true}
 
-			return container.NewHBox(t, level, msg)
+			return container.NewHBox(t, level, source, msg)
 		},
 		func(idx widget.ListItemID, obj fyne.CanvasObject) {
 			p.mu.Lock()
@@ -89,13 +93,18 @@ func newActivityPanel() *activityPanel {
 			box := obj.(*fyne.Container)
 			t := box.Objects[0].(*canvas.Text)
 			level := box.Objects[1].(*canvas.Text)
-			msg := box.Objects[2].(*canvas.Text)
+			source := box.Objects[2].(*canvas.Text)
+			msg := box.Objects[3].(*canvas.Text)
 
 			t.Text = s.Time.Format("15:04:05")
 			t.Refresh()
 			level.Text = fmt.Sprintf("%-5s", s.Level.String())
 			level.Color = levelColor(s.Level)
 			level.Refresh()
+			tag, tagColor := sourceTagFor(s.Message)
+			source.Text = tag
+			source.Color = tagColor
+			source.Refresh()
 			msg.Text = s.Message
 			msg.Color = edFg
 			msg.Refresh()
@@ -336,6 +345,36 @@ func (p *activityPanel) AttachPrefs(prefs fyne.Preferences) {
 
 func prefKeyForLevel(l reporter.Level) string {
 	return "activity.level." + l.String()
+}
+
+// sourceTagFor classifies a status message by its source subsystem
+// and returns a fixed-width bracketed tag for alignment and a colour
+// matching the footer chip palette. Uses the same prefix matcher as
+// destBar so an event's footer chip and its row tag agree.
+func sourceTagFor(message string) (string, color.Color) {
+	dest := matchDestination(message)
+	tag, c := sourceTagStyle(dest)
+	// Pad to a fixed visual width so the message column always lines up.
+	// [ EDDN  ] is 8 chars; [ -- ] for unmatched is also padded to match.
+	return fmt.Sprintf("[%-5s]", tag), c
+}
+
+func sourceTagStyle(dest string) (string, color.Color) {
+	switch dest {
+	case "EDDN":
+		return "EDDN", edStatusInfo
+	case "EDSM":
+		return "EDSM", edStatusInfo
+	case "Inara":
+		return "INARA", edStatusInfo
+	case "FC sync":
+		return "FC", edStatusOK
+	case "cAPI":
+		return "cAPI", edOrange
+	case "RC":
+		return "RC", edStatusOK
+	}
+	return " -- ", edFgDim
 }
 
 func levelColor(l reporter.Level) color.Color {
