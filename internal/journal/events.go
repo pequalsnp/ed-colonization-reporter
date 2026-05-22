@@ -21,9 +21,12 @@ const (
 	EventDocked                        = "Docked"
 	EventUndocked                      = "Undocked"
 	EventMarket                        = "Market"
+	EventMarketBuy                     = "MarketBuy"
+	EventMarketSell                    = "MarketSell"
 	EventCargoTransfer                 = "CargoTransfer"
 	EventColonisationConstructionDepot = "ColonisationConstructionDepot"
 	EventColonisationContribution      = "ColonisationContribution"
+	EventColonisationBeaconDeployed    = "ColonisationBeaconDeployed"
 )
 
 // Envelope is the minimal common shape of every journal event line. Parse
@@ -114,14 +117,22 @@ type LocationLikeEvent struct {
 	StarPos       [3]float64 `json:"StarPos"`
 }
 
-// DockedEvent corresponds to the "Docked" journal event.
+// DockedEvent corresponds to the "Docked" journal event. The
+// StationFaction / Body fields are optional in the journal — Frontier
+// only emits them in some contexts (planetary docks always include
+// Body+BodyID; orbital docks always include StationFaction.Name).
 type DockedEvent struct {
 	Envelope
-	StationName     string `json:"StationName"`
-	StationType     string `json:"StationType"`
-	MarketID        int64  `json:"MarketID"`
-	SystemAddress   int64  `json:"SystemAddress"`
-	StarSystem      string `json:"StarSystem"`
+	StationName    string `json:"StationName"`
+	StationType    string `json:"StationType"`
+	MarketID       int64  `json:"MarketID"`
+	SystemAddress  int64  `json:"SystemAddress"`
+	StarSystem     string `json:"StarSystem"`
+	StationFaction struct {
+		Name string `json:"Name"`
+	} `json:"StationFaction"`
+	Body   string `json:"Body,omitempty"`
+	BodyID *int   `json:"BodyID,omitempty"`
 }
 
 // UndockedEvent corresponds to the "Undocked" journal event.
@@ -168,6 +179,16 @@ type ColonisationContributionEvent struct {
 	Envelope
 	MarketID      int64          `json:"MarketID"`
 	Contributions []Contribution `json:"Contributions"`
+}
+
+// ColonisationBeaconDeployedEvent fires when the commander drops a
+// colonisation beacon — Frontier's way of claiming a system as
+// architect. ravencolonial uses this to set the cmdr as the system's
+// architect record.
+type ColonisationBeaconDeployedEvent struct {
+	Envelope
+	SystemAddress int64  `json:"SystemAddress"`
+	StarSystem    string `json:"StarSystem"`
 }
 
 // CarrierStatsEvent is emitted on game start (and on demand) with the full
@@ -237,6 +258,30 @@ type CargoTransferItem struct {
 type CargoTransferEvent struct {
 	Envelope
 	Transfers []CargoTransferItem `json:"Transfers"`
+}
+
+// MarketBuyEvent fires when the player buys commodities at a station's
+// commodities market. At an owned FC this means cargo leaves the FC.
+type MarketBuyEvent struct {
+	Envelope
+	MarketID      int64  `json:"MarketID"`
+	Type          string `json:"Type"`
+	TypeLocalised string `json:"Type_Localised"`
+	Count         int    `json:"Count"`
+	BuyPrice      int    `json:"BuyPrice"`
+	TotalCost     int    `json:"TotalCost"`
+}
+
+// MarketSellEvent fires when the player sells commodities at a station's
+// commodities market. At an owned FC this means cargo arrives at the FC.
+type MarketSellEvent struct {
+	Envelope
+	MarketID      int64  `json:"MarketID"`
+	Type          string `json:"Type"`
+	TypeLocalised string `json:"Type_Localised"`
+	Count         int    `json:"Count"`
+	SellPrice     int    `json:"SellPrice"`
+	TotalSale     int    `json:"TotalSale"`
 }
 
 // trimUTF8BOM strips a leading UTF-8 BOM (EF BB BF) if present. Frontier

@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"net/http"
 	"reflect"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/pequalsnp/ed-colonization-reporter/internal/journal"
 	"github.com/pequalsnp/ed-colonization-reporter/internal/ravencolonial"
@@ -232,6 +234,266 @@ func TestHandleCarrierJump_PreservesOwnedRecord(t *testing.T) {
 	}
 }
 
+func TestHandleCommander_FetchesLinkedCarriers(t *testing.T) {
+	sess := state.New()
+	api := &fakeAPI{
+		linkedCarriersResp: []ravencolonial.LinkedCarrier{
+			{MarketID: 42, Name: "MY-FC", Callsign: "ABC-12X", StarSystem: "Sol"},
+			{MarketID: 99, Name: "OTHER", Callsign: "XYZ-789"},
+		},
+	}
+	r := New(api, sess)
+	raw := mustRaw(t, journal.EventCommander, map[string]any{"Name": "Jameson", "FID": "F1"})
+	if err := r.HandleEvent(context.Background(), raw); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	// fetchLinkedCarriers runs in a goroutine — give it a beat to land.
+	deadline := time.After(2 * time.Second)
+	var calls []string
+	for {
+		calls = api.linkedCalls()
+		if len(calls) > 0 {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("CommanderCarriers was never called")
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+	for {
+		if sess.IsOwnedCarrier(42) && sess.IsOwnedCarrier(99) {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("session never registered the linked carriers")
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+	if calls[0] != "Jameson" {
+		t.Errorf("CommanderCarriers called with %q, want Jameson", calls[0])
+	}
+}
+
+func TestHandleCommander_DoesNotFetchOnReplay(t *testing.T) {
+	sess := state.New()
+	api := &fakeAPI{}
+	r := New(api, sess)
+	raw := mustRaw(t, journal.EventCommander, map[string]any{"Name": "Jameson", "FID": "F1"})
+	raw.Replayed = true
+	if err := r.HandleEvent(context.Background(), raw); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	// Give the goroutine a chance NOT to run.
+	time.Sleep(100 * time.Millisecond)
+	if calls := api.linkedCalls(); len(calls) != 0 {
+		t.Errorf("replayed Commander must not trigger fetch; got %v", calls)
+	}
+}
+
+func TestHandleDocked_RefreshesProjectMetadata(t *testing.T) {
+	sess := state.New()
+	sess.SetCommander("Jameson", "F1")
+	sess.RememberBuild(128666761, "build-belshaw") // already tracking this build
+	api := &fakeAPI{}
+	r := New(api, sess)
+	body := 3
+	raw := mustRaw(t, journal.EventDocked, map[string]any{
+		"MarketID":    128666761,
+		"StarSystem":  "Synuefe CN-H d11-83",
+		"StationName": "Belshaw Berth",
+		"StationFaction": map[string]any{"Name": "Synuefe CN-H d11-83 Independents"},
+		"Body":   "Synuefe CN-H d11-83 1",
+		"BodyID": body,
+	})
+	if err := r.HandleEvent(context.Background(), raw); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if len(api.projectPatches) != 1 {
+		t.Fatalf("project patches = %d", len(api.projectPatches))
+	}
+	p := api.projectPatches[0]
+	if p.BuildID != "build-belshaw" {
+		t.Errorf("BuildID = %q", p.BuildID)
+	}
+	if p.Patch.FactionName != "Synuefe CN-H d11-83 Independents" {
+		t.Errorf("FactionName = %q", p.Patch.FactionName)
+	}
+	if p.Patch.BodyName != "Synuefe CN-H d11-83 1" {
+		t.Errorf("BodyName = %q", p.Patch.BodyName)
+	}
+	if p.Patch.BodyNum == nil || *p.Patch.BodyNum != 3 {
+		t.Errorf("BodyNum = %v, want pointer-to-3", p.Patch.BodyNum)
+	}
+}
+
+func TestHandleDocked_NoPatchForUntrackedBuild(t *testing.T) {
+	sess := state.New()
+	sess.SetCommander("Jameson", "F1")
+	// No RememberBuild — this dock is unrelated to any tracked project.
+	api := &fakeAPI{}
+	r := New(api, sess)
+	raw := mustRaw(t, journal.EventDocked, map[string]any{
+		"MarketID":    128666761,
+		"StarSystem":  "Sol",
+		"StationName": "Abraham Lincoln",
+		"StationFaction": map[string]any{"Name": "Mother Gaia"},
+	})
+	if err := r.HandleEvent(context.Background(), raw); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if len(api.projectPatches) != 0 {
+		t.Errorf("untracked dock must not patch; got %v", api.projectPatches)
+	}
+}
+
+func TestHandleBeaconDeployed_SetsArchitect(t *testing.T) {
+	sess := state.New()
+	sess.SetCommander("Jameson", "F1")
+	sess.SetSystemWithPos("Synuefe CN-H d11-83", 12345, [3]float64{1, 2, 3})
+	api := &fakeAPI{}
+	r := New(api, sess)
+	raw := mustRaw(t, journal.EventColonisationBeaconDeployed, map[string]any{
+		"SystemAddress": 12345,
+		"StarSystem":    "Synuefe CN-H d11-83",
+	})
+	if err := r.HandleEvent(context.Background(), raw); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if len(api.architectCalls) != 1 {
+		t.Fatalf("architect calls = %d", len(api.architectCalls))
+	}
+	got := api.architectCalls[0]
+	if got.System != "Synuefe CN-H d11-83" || got.Commander != "Jameson" {
+		t.Errorf("architect call = %+v", got)
+	}
+}
+
+func TestHandleBeaconDeployed_SilentWithoutAPIKey(t *testing.T) {
+	sess := state.New()
+	sess.SetCommander("Jameson", "F1")
+	api := &fakeAPI{architectErr: ravencolonial.ErrNoAPIKey}
+	r := New(api, sess)
+	errors := 0
+	r.OnStatus(func(s Status) {
+		if s.Level == LevelError {
+			errors++
+		}
+	})
+	raw := mustRaw(t, journal.EventColonisationBeaconDeployed, map[string]any{
+		"SystemAddress": 1, "StarSystem": "Sol",
+	})
+	if err := r.HandleEvent(context.Background(), raw); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if errors != 0 {
+		t.Errorf("missing rcc-key should not surface ERROR; got %d", errors)
+	}
+}
+
+func TestHandleBeaconDeployed_SkipsReplayed(t *testing.T) {
+	sess := state.New()
+	sess.SetCommander("Jameson", "F1")
+	api := &fakeAPI{}
+	r := New(api, sess)
+	raw := mustRaw(t, journal.EventColonisationBeaconDeployed, map[string]any{
+		"SystemAddress": 1, "StarSystem": "Sol",
+	})
+	raw.Replayed = true
+	if err := r.HandleEvent(context.Background(), raw); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if len(api.architectCalls) != 0 {
+		t.Errorf("replayed beacon must not set architect; got %v", api.architectCalls)
+	}
+}
+
+func TestHandleMarketBuy_AtOwnedFCSubtracts(t *testing.T) {
+	sess := state.New()
+	sess.SetCommander("Jameson", "F1")
+	sess.RegisterOwnedCarrier(state.OwnedCarrier{MarketID: 42, Name: "MY-FC", Callsign: "Y"})
+	sess.SetDocked("MY-FC Y", 42, 100)
+
+	api := &fakeAPI{}
+	r := New(api, sess)
+	raw := mustRaw(t, journal.EventMarketBuy, map[string]any{
+		"MarketID": 42, "Type": "titanium", "Type_Localised": "Titanium",
+		"Count": 100, "BuyPrice": 1200, "TotalCost": 120000,
+	})
+	if err := r.HandleEvent(context.Background(), raw); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if len(api.fcCargoPatches) != 1 {
+		t.Fatalf("patches = %d", len(api.fcCargoPatches))
+	}
+	patch := api.fcCargoPatches[0]
+	if patch.MarketID != 42 {
+		t.Errorf("MarketID = %d", patch.MarketID)
+	}
+	if patch.Cargo["titanium"] != -100 {
+		t.Errorf("titanium delta = %d, want -100 (buying from FC drains it)", patch.Cargo["titanium"])
+	}
+}
+
+func TestHandleMarketSell_AtOwnedFCAdds(t *testing.T) {
+	sess := state.New()
+	sess.SetCommander("Jameson", "F1")
+	sess.RegisterOwnedCarrier(state.OwnedCarrier{MarketID: 42, Name: "MY-FC", Callsign: "Y"})
+	sess.SetDocked("MY-FC Y", 42, 100)
+
+	api := &fakeAPI{}
+	r := New(api, sess)
+	raw := mustRaw(t, journal.EventMarketSell, map[string]any{
+		"MarketID": 42, "Type": "titanium", "Count": 50, "SellPrice": 1300, "TotalSale": 65000,
+	})
+	if err := r.HandleEvent(context.Background(), raw); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if len(api.fcCargoPatches) != 1 {
+		t.Fatalf("patches = %d", len(api.fcCargoPatches))
+	}
+	if api.fcCargoPatches[0].Cargo["titanium"] != 50 {
+		t.Errorf("titanium delta = %d, want +50 (selling to FC fills it)", api.fcCargoPatches[0].Cargo["titanium"])
+	}
+}
+
+func TestHandleMarketBuy_AtSomeoneElsesStationIgnored(t *testing.T) {
+	sess := state.New()
+	sess.SetCommander("Jameson", "F1")
+	// Owned FC marketID = 42; we're buying at 99.
+	sess.RegisterOwnedCarrier(state.OwnedCarrier{MarketID: 42})
+	api := &fakeAPI{}
+	r := New(api, sess)
+	raw := mustRaw(t, journal.EventMarketBuy, map[string]any{
+		"MarketID": 99, "Type": "titanium", "Count": 100,
+	})
+	if err := r.HandleEvent(context.Background(), raw); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if len(api.fcCargoPatches) != 0 {
+		t.Errorf("buys at non-owned markets must not PATCH; got %v", api.fcCargoPatches)
+	}
+}
+
+func TestHandleMarketBuy_SkippedOnReplay(t *testing.T) {
+	sess := state.New()
+	sess.SetCommander("Jameson", "F1")
+	sess.RegisterOwnedCarrier(state.OwnedCarrier{MarketID: 42})
+	api := &fakeAPI{}
+	r := New(api, sess)
+	raw := mustRaw(t, journal.EventMarketBuy, map[string]any{
+		"MarketID": 42, "Type": "titanium", "Count": 1,
+	})
+	raw.Replayed = true
+	if err := r.HandleEvent(context.Background(), raw); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if len(api.fcCargoPatches) != 0 {
+		t.Errorf("replayed MarketBuy must not PATCH; got %v", api.fcCargoPatches)
+	}
+}
+
 func TestHandleCargoTransfer_PatchesDeltaForOwnedFC(t *testing.T) {
 	sess := state.New()
 	sess.SetCommander("Jameson", "F1")
@@ -437,21 +699,40 @@ func TestHandleCarrierJump_DoesNotClaimOwnershipOfOtherFC(t *testing.T) {
 // fakeAPI is a minimal stub of the ravencolonial APIClient used to assert
 // what the reporter calls.
 type fakeAPI struct {
-	lookups        []lookupCall
-	updates        []ravencolonial.ProjectUpdate
-	creates        []ravencolonial.ProjectCreate
-	completes      []string
-	contributions  []contributionCall
-	fcPuts         []ravencolonial.FleetCarrier
-	fcCargo        []fcCargoCall
-	fcCargoPatches []fcCargoCall
-	lookupResp     map[lookupKey]*ravencolonial.Project
-	lookupErr      map[lookupKey]error
-	createResp     *ravencolonial.Project
-	createErr      error
-	updateErr      error
-	fcPutErr       error
-	fcCargoErr     error
+	// Concurrent-safe slices guarded by mu. Tests that read these from
+	// the test goroutine while the reporter writes them from a worker
+	// goroutine MUST use the helper accessors (e.g. linkedCalls()).
+	mu                 sync.Mutex
+	lookups            []lookupCall
+	updates            []ravencolonial.ProjectUpdate
+	creates            []ravencolonial.ProjectCreate
+	completes          []string
+	contributions      []contributionCall
+	fcPuts             []ravencolonial.FleetCarrier
+	fcCargo            []fcCargoCall
+	fcCargoPatches     []fcCargoCall
+	architectCalls     []architectCall
+	projectPatches     []projectPatchCall
+	linkedCarrierCalls []string
+
+	linkedCarriersResp []ravencolonial.LinkedCarrier
+	lookupResp         map[lookupKey]*ravencolonial.Project
+	lookupErr          map[lookupKey]error
+	createResp         *ravencolonial.Project
+	createErr          error
+	updateErr          error
+	fcPutErr           error
+	fcCargoErr         error
+	architectErr       error
+	linkedCarriersErr  error
+}
+
+func (f *fakeAPI) linkedCalls() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]string, len(f.linkedCarrierCalls))
+	copy(out, f.linkedCarrierCalls)
+	return out
 }
 
 type fcCargoCall struct {
@@ -534,6 +815,32 @@ func (f *fakeAPI) OverwriteCarrierCargo(_ context.Context, marketID int64, c rav
 func (f *fakeAPI) PatchCarrierCargo(_ context.Context, marketID int64, c ravencolonial.Cargo) error {
 	f.fcCargoPatches = append(f.fcCargoPatches, fcCargoCall{MarketID: marketID, Cargo: c})
 	return f.fcCargoErr
+}
+
+func (f *fakeAPI) SetSystemArchitect(_ context.Context, systemName, cmdr string) error {
+	f.architectCalls = append(f.architectCalls, architectCall{System: systemName, Commander: cmdr})
+	return f.architectErr
+}
+
+func (f *fakeAPI) PatchProject(_ context.Context, buildID string, patch ravencolonial.ProjectPatch) error {
+	f.projectPatches = append(f.projectPatches, projectPatchCall{BuildID: buildID, Patch: patch})
+	return nil
+}
+
+func (f *fakeAPI) CommanderCarriers(_ context.Context, cmdr string) ([]ravencolonial.LinkedCarrier, error) {
+	f.mu.Lock()
+	f.linkedCarrierCalls = append(f.linkedCarrierCalls, cmdr)
+	resp := f.linkedCarriersResp
+	err := f.linkedCarriersErr
+	f.mu.Unlock()
+	return resp, err
+}
+
+type architectCall struct{ System, Commander string }
+
+type projectPatchCall struct {
+	BuildID string
+	Patch   ravencolonial.ProjectPatch
 }
 
 func mustRaw(t *testing.T, event string, payload any) journal.Raw {

@@ -30,6 +30,9 @@ type APIClient interface {
 	PutFleetCarrier(ctx context.Context, fc ravencolonial.FleetCarrier) error
 	OverwriteCarrierCargo(ctx context.Context, marketID int64, cargo ravencolonial.Cargo) error
 	PatchCarrierCargo(ctx context.Context, marketID int64, delta ravencolonial.Cargo) error
+	SetSystemArchitect(ctx context.Context, systemName, cmdr string) error
+	PatchProject(ctx context.Context, buildID string, patch ravencolonial.ProjectPatch) error
+	CommanderCarriers(ctx context.Context, cmdr string) ([]ravencolonial.LinkedCarrier, error)
 }
 
 // Status is a user-visible status update emitted by the reporter.
@@ -81,6 +84,11 @@ type Reporter struct {
 	// readMarketFile is overridable for tests. Production leaves it nil and
 	// the package-default implementation reads from JournalDir.
 	readMarketFile func(dir string) (*journal.MarketFile, error)
+
+	// linkedCarriersFetchedFor tracks which commander we last pulled the
+	// /api/cmdr/{cmdr}/fc/all list for. Only fetch once per commander
+	// switch — the list rarely changes mid-session.
+	linkedCarriersFetchedFor string
 }
 
 // New constructs a Reporter.
@@ -126,6 +134,13 @@ func (r *Reporter) HandleEvent(ctx context.Context, raw journal.Raw) error {
 		}
 		r.Session.SetCommander(e.Name, e.FID)
 		r.emit(LevelInfo, "Commander: %s", e.Name)
+		// Live (not replayed) commander events kick off the one-time
+		// linked-carrier fetch so we recognise FCs that were linked via
+		// the website before this session started.
+		if !raw.Replayed && e.Name != "" && r.linkedCarriersFetchedFor != e.Name {
+			r.linkedCarriersFetchedFor = e.Name
+			go r.fetchLinkedCarriers(context.Background(), e.Name)
+		}
 	case journal.EventLoadGame:
 		var e journal.LoadGameEvent
 		if err := json.Unmarshal(raw.Payload, &e); err != nil {
@@ -155,6 +170,12 @@ func (r *Reporter) HandleEvent(ctx context.Context, raw journal.Raw) error {
 			r.Session.SetSystem(e.StarSystem, e.SystemAddress)
 		}
 		r.Session.SetDocked(e.StationName, e.MarketID, e.SystemAddress)
+		// If we're docking at a build site we already track, refresh its
+		// faction/body metadata on ravencolonial. Safe on replay because
+		// PatchProject with the same values is a no-op server-side.
+		if buildID, ok := r.Session.BuildFor(e.MarketID); ok {
+			r.refreshProjectMetadata(ctx, buildID, e)
+		}
 	case journal.EventUndocked:
 		r.Session.SetUndocked()
 	case journal.EventColonisationConstructionDepot:
@@ -214,6 +235,15 @@ func (r *Reporter) HandleEvent(ctx context.Context, raw journal.Raw) error {
 			return fmt.Errorf("market: %w", err)
 		}
 		return r.handleMarket(ctx, e)
+	case journal.EventColonisationBeaconDeployed:
+		if raw.Replayed {
+			return nil // setting architect is server-side immutable-ish
+		}
+		var e journal.ColonisationBeaconDeployedEvent
+		if err := json.Unmarshal(raw.Payload, &e); err != nil {
+			return fmt.Errorf("beacon: %w", err)
+		}
+		return r.handleBeaconDeployed(ctx, e)
 	case journal.EventCargoTransfer:
 		if raw.Replayed {
 			// Skipping replayed cargo transfers: PatchCarrierCargo applies
@@ -226,7 +256,126 @@ func (r *Reporter) HandleEvent(ctx context.Context, raw journal.Raw) error {
 			return fmt.Errorf("cargotransfer: %w", err)
 		}
 		return r.handleCargoTransfer(ctx, e)
+	case journal.EventMarketBuy:
+		if raw.Replayed {
+			return nil // same accumulation rationale as CargoTransfer
+		}
+		var e journal.MarketBuyEvent
+		if err := json.Unmarshal(raw.Payload, &e); err != nil {
+			return fmt.Errorf("marketbuy: %w", err)
+		}
+		// Buying from a market: cargo leaves the station. If it's our FC,
+		// that's a negative delta against our FC stock.
+		return r.handleFCMarketDelta(ctx, e.MarketID, e.Type, e.TypeLocalised, -e.Count, "buy")
+	case journal.EventMarketSell:
+		if raw.Replayed {
+			return nil
+		}
+		var e journal.MarketSellEvent
+		if err := json.Unmarshal(raw.Payload, &e); err != nil {
+			return fmt.Errorf("marketsell: %w", err)
+		}
+		// Selling to a market: cargo arrives at the station. If it's our
+		// FC, that's a positive delta.
+		return r.handleFCMarketDelta(ctx, e.MarketID, e.Type, e.TypeLocalised, +e.Count, "sell")
 	}
+	return nil
+}
+
+// fetchLinkedCarriers pulls the commander's website-linked FCs from
+// ravencolonial and registers them in the session so subsequent
+// CargoTransfer / MarketBuy / MarketSell events at those FCs are
+// recognised even before the in-game CarrierStats arrives.
+func (r *Reporter) fetchLinkedCarriers(ctx context.Context, cmdr string) {
+	cs, err := r.API.CommanderCarriers(ctx, cmdr)
+	if err != nil {
+		r.emit(LevelWarn, "Fetch linked FCs for %s failed: %v", cmdr, err)
+		return
+	}
+	for _, c := range cs {
+		if c.MarketID == 0 {
+			continue
+		}
+		r.Session.RegisterOwnedCarrier(state.OwnedCarrier{
+			MarketID:   c.MarketID,
+			Name:       c.Name,
+			Callsign:   c.Callsign,
+			StarSystem: c.StarSystem,
+		})
+	}
+	if len(cs) > 0 {
+		r.emit(LevelInfo, "Loaded %d linked FC(s) from ravencolonial", len(cs))
+	}
+}
+
+// refreshProjectMetadata posts a sparse update with faction/body data
+// to a known project. SrvSurvey does this on every Docked event so the
+// website's project record stays accurate when the cmdr settles the
+// station's faction or the build is relocated to a different body.
+func (r *Reporter) refreshProjectMetadata(ctx context.Context, buildID string, e journal.DockedEvent) {
+	patch := ravencolonial.ProjectPatch{
+		FactionName: e.StationFaction.Name,
+		BodyName:    e.Body,
+		BodyNum:     e.BodyID,
+	}
+	if patch.FactionName == "" && patch.BodyName == "" && patch.BodyNum == nil {
+		return
+	}
+	if err := r.API.PatchProject(ctx, buildID, patch); err != nil {
+		r.emit(LevelWarn, "Refresh project %s metadata failed: %v", buildID, err)
+	}
+}
+
+// handleBeaconDeployed records the commander as architect of the system
+// where they just dropped the colonisation beacon.
+func (r *Reporter) handleBeaconDeployed(ctx context.Context, e journal.ColonisationBeaconDeployedEvent) error {
+	system := e.StarSystem
+	if system == "" {
+		system, _ = r.Session.System()
+	}
+	cmdr := r.Session.Commander()
+	if system == "" || cmdr == "" {
+		return nil
+	}
+	if err := r.API.SetSystemArchitect(ctx, system, cmdr); err != nil {
+		if errors.Is(err, ravencolonial.ErrNoAPIKey) {
+			r.emit(LevelInfo, "Beacon deployed in %s — set architect on ravencolonial requires rcc-key (skipped)", system)
+			return nil
+		}
+		r.emit(LevelError, "Set architect for %s failed: %v", system, err)
+		return err
+	}
+	r.emit(LevelOK, "Set %s as architect of %s on ravencolonial", cmdr, system)
+	return nil
+}
+
+// handleFCMarketDelta turns a MarketBuy or MarketSell at a known
+// commander-owned FC into a delta PATCH against ravencolonial's FC
+// cargo. Transactions at other stations are ignored. Count is signed:
+// negative for buys (cargo leaves the FC), positive for sells.
+func (r *Reporter) handleFCMarketDelta(ctx context.Context, marketID int64, typeSym, typeLocal string, count int, op string) error {
+	if marketID == 0 || count == 0 {
+		return nil
+	}
+	if !r.Session.IsOwnedCarrier(marketID) {
+		return nil // not our FC; irrelevant
+	}
+	key := NormalizeCommodity(typeSym)
+	if key == "" {
+		key = NormalizeCommodity(typeLocal)
+	}
+	if key == "" {
+		return nil
+	}
+	delta := ravencolonial.Cargo{key: count}
+	if err := r.API.PatchCarrierCargo(ctx, marketID, delta); err != nil {
+		if errors.Is(err, ravencolonial.ErrNoAPIKey) {
+			return nil
+		}
+		r.emit(LevelError, "FC market %s delta failed: %v", op, err)
+		return err
+	}
+	r.emit(LevelOK, "FC market %s posted (%s %+d)", op, key, count)
 	return nil
 }
 

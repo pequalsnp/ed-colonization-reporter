@@ -192,6 +192,68 @@ func (c *Client) OverwriteCarrierCargo(ctx context.Context, marketID int64, carg
 	return c.do(ctx, http.MethodPost, path, cargo, nil)
 }
 
+// SetSystemArchitect records a commander as the architect of a system.
+// Path is /api/v2/system/{name}/sites with body {"architect": cmdr}.
+// Requires rcc-key per SrvSurvey (RavenColonial.cs:367-390).
+func (c *Client) SetSystemArchitect(ctx context.Context, systemName, cmdr string) error {
+	if systemName == "" || cmdr == "" {
+		return errors.New("SetSystemArchitect: systemName and cmdr required")
+	}
+	if c.apiKey == "" {
+		return ErrNoAPIKey
+	}
+	path := "/api/v2/system/" + url.PathEscape(systemName) + "/sites"
+	body := map[string]string{"architect": cmdr}
+	return c.do(ctx, http.MethodPut, path, body, nil)
+}
+
+// LinkedCarriers fetches the FCs the commander has linked to projects
+// via the ravencolonial website (independent of in-game CarrierStats
+// events). Used at startup so we know which markets to track without
+// waiting for the game to emit a fresh CarrierStats.
+type LinkedCarrier struct {
+	MarketID   int64  `json:"marketId"`
+	Name       string `json:"name"`
+	Callsign   string `json:"callsign"`
+	StarSystem string `json:"starSystem"`
+}
+
+// CommanderCarriers returns the commander's linked FCs.
+func (c *Client) CommanderCarriers(ctx context.Context, cmdr string) ([]LinkedCarrier, error) {
+	if cmdr == "" {
+		return nil, errors.New("CommanderCarriers: cmdr required")
+	}
+	path := "/api/cmdr/" + url.PathEscape(cmdr) + "/fc/all"
+	var out []LinkedCarrier
+	if err := c.do(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// PatchProject applies a sparse update to a project — used for tagging
+// factionName and bodyName/bodyNum once the commander docks at a build
+// site that didn't have those fields populated when it was created.
+type ProjectPatch struct {
+	FactionName string  `json:"factionName,omitempty"`
+	BodyName    string  `json:"bodyName,omitempty"`
+	BodyNum     *int    `json:"bodyNum,omitempty"`
+}
+
+// PatchProject POSTs a sparse partial-update to /api/project/{buildId}.
+// SrvSurvey uses the same endpoint for both full updates and these
+// metadata patches (ColonyData.cs:283-327).
+func (c *Client) PatchProject(ctx context.Context, buildID string, patch ProjectPatch) error {
+	if buildID == "" {
+		return errors.New("PatchProject: buildID required")
+	}
+	if patch.FactionName == "" && patch.BodyName == "" && patch.BodyNum == nil {
+		return nil // nothing to send
+	}
+	path := "/api/project/" + url.PathEscape(buildID)
+	return c.do(ctx, http.MethodPost, path, patch, nil)
+}
+
 // PatchCarrierCargo applies a delta to the FC's stored cargo. Positive
 // values add, negative values remove. Used when the player transfers
 // cargo to/from the carrier mid-session — there is no full inventory
