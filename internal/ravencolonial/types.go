@@ -30,6 +30,36 @@ type ProjectUpdate struct {
 	MaxNeed     int            `json:"maxNeed"`
 }
 
+// ProjectCreate is the body of PUT /api/project/ — used to register a new
+// build with ravencolonial the first time we see its construction depot.
+//
+// Field names and required-vs-optional split mirror SrvSurvey's
+// ProjectCreate model (RavenColonial.cs:700-710 + ProjectCore:673-698).
+type ProjectCreate struct {
+	// Required fields — server rejects when missing.
+	BuildType     string         `json:"buildType"`
+	BuildName     string         `json:"buildName"`
+	MarketID      int64          `json:"marketId"`
+	SystemAddress int64          `json:"systemAddress"`
+	SystemName    string         `json:"systemName"`
+	StarPos       [3]float64     `json:"starPos"`
+	MaxNeed       int            `json:"maxNeed"`
+	IsPrimaryPort bool           `json:"isPrimaryPort"`
+	Commodities   map[string]int `json:"commodities"`
+
+	// Optional fields — Newtonsoft.Json drops nulls on the C# side; we
+	// achieve the same via omitempty.
+	BodyNum                       *int                `json:"bodyNum,omitempty"`
+	BodyName                      string              `json:"bodyName,omitempty"`
+	FactionName                   string              `json:"factionName,omitempty"`
+	ArchitectName                 string              `json:"architectName,omitempty"`
+	DiscordLink                   string              `json:"discordLink,omitempty"`
+	Notes                         string              `json:"notes,omitempty"`
+	SystemSiteID                  string              `json:"systemSiteId,omitempty"`
+	Commanders                    map[string][]string `json:"commanders,omitempty"`
+	ColonisationConstructionDepot any                 `json:"colonisationConstructionDepot,omitempty"`
+}
+
 // Contribution is the body of POST /api/project/{buildId}/contribute/{cmdr}.
 // The map keys are commodity symbol names (e.g. "titanium"); values are the
 // integer amount delivered by the commander on this contribution.

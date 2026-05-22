@@ -113,6 +113,31 @@ func (c *Client) UpdateProject(ctx context.Context, update ProjectUpdate) error 
 	return c.do(ctx, http.MethodPost, path, update, nil)
 }
 
+// CreateProject registers a new build with ravencolonial. Returns the
+// full Project — most importantly the server-assigned BuildID, which
+// callers must cache for subsequent UpdateProject / Contribute calls.
+func (c *Client) CreateProject(ctx context.Context, p ProjectCreate) (*Project, error) {
+	if p.MarketID == 0 {
+		return nil, errors.New("CreateProject: MarketID required")
+	}
+	if p.SystemAddress == 0 {
+		return nil, errors.New("CreateProject: SystemAddress required")
+	}
+	if p.SystemName == "" {
+		return nil, errors.New("CreateProject: SystemName required")
+	}
+	if p.Commodities == nil {
+		// Server rejects null but accepts {}; normalise here so callers
+		// don't have to remember.
+		p.Commodities = map[string]int{}
+	}
+	var out Project
+	if err := c.do(ctx, http.MethodPut, "/api/project/", p, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // CompleteProject marks a build as complete.
 func (c *Client) CompleteProject(ctx context.Context, buildID string) error {
 	if buildID == "" {

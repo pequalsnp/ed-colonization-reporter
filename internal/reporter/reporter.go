@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/pequalsnp/ed-colonization-reporter/internal/journal"
@@ -22,6 +23,7 @@ import (
 // it as an interface lets tests substitute a fake.
 type APIClient interface {
 	ProjectBySystemMarket(ctx context.Context, systemAddress, marketID int64) (*ravencolonial.Project, error)
+	CreateProject(ctx context.Context, p ravencolonial.ProjectCreate) (*ravencolonial.Project, error)
 	UpdateProject(ctx context.Context, update ravencolonial.ProjectUpdate) error
 	CompleteProject(ctx context.Context, buildID string) error
 	Contribute(ctx context.Context, buildID, cmdr string, contrib ravencolonial.Contribution) error
@@ -378,8 +380,30 @@ func (r *Reporter) handleDepot(ctx context.Context, e journal.ColonisationConstr
 		proj, err := r.API.ProjectBySystemMarket(ctx, sysAddr, marketID)
 		if err != nil {
 			if ravencolonial.IsNotFound(err) {
-				r.emit(LevelInfo, "No ravencolonial project yet for market %d in system %d", marketID, sysAddr)
-				return nil
+				// Cold-start case: ravencolonial doesn't know about this
+				// depot yet. Create it so subsequent updates have a
+				// project to attach to. Replayed events skip this — we
+				// don't want backfill to spam new projects.
+				if r.Session.Commander() == "" {
+					r.emit(LevelInfo, "Skipping project creation for market %d: commander not known yet", marketID)
+					return nil
+				}
+				created, cerr := r.createProjectFromDepot(ctx, e, sysAddr, marketID)
+				if cerr != nil {
+					r.emit(LevelError, "Create ravencolonial project for market %d failed: %v", marketID, cerr)
+					return cerr
+				}
+				if created == nil || created.BuildID == "" {
+					r.emit(LevelWarn, "Create project for market %d returned no BuildID", marketID)
+					return nil
+				}
+				buildID = created.BuildID
+				r.Session.RememberBuild(marketID, buildID)
+				r.emit(LevelOK, "Created ravencolonial project %s (%s)", created.BuildName, buildID)
+				// Fall through — we just sent the depot snapshot in the
+				// create body, no need to also POST an update for the
+				// same data.
+				return r.handleDepotComplete(ctx, e, buildID, marketID)
 			}
 			r.emit(LevelError, "Lookup project for market %d failed: %v", marketID, err)
 			return err
@@ -466,10 +490,14 @@ func (r *Reporter) handleContribution(ctx context.Context, e journal.Colonisatio
 }
 
 // commoditiesFromDepot converts the ResourcesRequired array into the
-// {symbol: outstanding} map the API expects, and computes maxNeed.
+// {symbol: outstanding} map ravencolonial expects, plus maxNeed = sum of
+// RequiredAmount (project total size, not outstanding).
+//
+// SrvSurvey populates maxNeed the same way (FormNewProject.cs:209) and
+// ravencolonial uses it for progress display.
 func commoditiesFromDepot(e journal.ColonisationConstructionDepotEvent) (map[string]int, int) {
 	out := make(map[string]int, len(e.ResourcesRequired))
-	max := 0
+	total := 0
 	for _, r := range e.ResourcesRequired {
 		need := r.RequiredAmount - r.ProvidedAmount
 		if need < 0 {
@@ -483,11 +511,106 @@ func commoditiesFromDepot(e journal.ColonisationConstructionDepotEvent) (map[str
 			continue
 		}
 		out[key] = need
-		if need > max {
-			max = need
-		}
+		total += r.RequiredAmount
 	}
-	return out, max
+	return out, total
+}
+
+// deriveBuildName turns the in-game StationName into the human-readable
+// project name SrvSurvey populates by default (ColonyData.cs:37-49).
+// Colonisation-ship docks become "Primary port"; "Orbital Construction
+// Site: Foo" → "Foo"; "Planetary Construction Site: Foo" → "Foo".
+func deriveBuildName(stationName string) string {
+	const colonisationShipPrefix = "$EXT_PANEL_ColonisationShip"
+	if stationName == "System Colonisation Ship" ||
+		strings.HasPrefix(stationName, colonisationShipPrefix) ||
+		strings.HasPrefix(stationName, "$EXT_PNL_ColonisationShip") {
+		return "Primary port"
+	}
+	name := stationName
+	name = strings.Replace(name, "$EXT_PANEL_ColonisationShip; ", "", 1)
+	name = strings.Replace(name, "Orbital Construction Site:", "", 1)
+	name = strings.Replace(name, "Planetary Construction Site:", "", 1)
+	return strings.TrimSpace(name)
+}
+
+// isPrimaryPort reports whether the dock is the system's first build —
+// i.e. the colonisation ship rather than a regular construction depot.
+func isPrimaryPort(stationName string) bool {
+	return stationName == "System Colonisation Ship" ||
+		strings.HasPrefix(stationName, "$EXT_PANEL_ColonisationShip") ||
+		strings.HasPrefix(stationName, "$EXT_PNL_ColonisationShip")
+}
+
+// createProjectFromDepot builds a ProjectCreate payload from the depot
+// event + session state and PUTs it to ravencolonial.
+func (r *Reporter) createProjectFromDepot(ctx context.Context, e journal.ColonisationConstructionDepotEvent, sysAddr, marketID int64) (*ravencolonial.Project, error) {
+	commodities, maxNeed := commoditiesFromDepot(e)
+	systemName, _ := r.Session.System()
+	starPos, _ := r.Session.StarPos()
+	_, stationName, _ := r.Session.Dock()
+	cmdr := r.Session.Commander()
+
+	primary := isPrimaryPort(stationName)
+	buildName := deriveBuildName(stationName)
+	if buildName == "" {
+		buildName = "Unknown build"
+	}
+	// We can't derive the precise architectural subtype from the journal —
+	// SrvSurvey requires the user to pick it from a dropdown. Send a
+	// placeholder that's clear when the user inspects on the website.
+	buildType := "unknown"
+	if primary {
+		buildType = "primary-port"
+	}
+
+	p := ravencolonial.ProjectCreate{
+		BuildType:     buildType,
+		BuildName:     buildName,
+		MarketID:      marketID,
+		SystemAddress: sysAddr,
+		SystemName:    systemName,
+		StarPos:       starPos,
+		MaxNeed:       maxNeed,
+		IsPrimaryPort: primary,
+		Commodities:   commodities,
+		ArchitectName: cmdr,
+		Commanders:    map[string][]string{cmdr: {}},
+	}
+	// Embed the depot event so the website has the full snapshot if
+	// SrvSurvey-style consumers need it.
+	var raw map[string]any
+	if err := json.Unmarshal(rawPayloadOrNil(e), &raw); err == nil && len(raw) > 0 {
+		p.ColonisationConstructionDepot = raw
+	}
+	return r.API.CreateProject(ctx, p)
+}
+
+// rawPayloadOrNil returns the JSON-encoded depot event suitable for
+// embedding. We re-marshal because the caller has the typed struct, not
+// the original payload bytes.
+func rawPayloadOrNil(e journal.ColonisationConstructionDepotEvent) []byte {
+	b, err := json.Marshal(e)
+	if err != nil {
+		return nil
+	}
+	return b
+}
+
+// handleDepotComplete handles the "ConstructionComplete=true" follow-up
+// after a project was just created. Shared between the create path and
+// the regular update path.
+func (r *Reporter) handleDepotComplete(ctx context.Context, e journal.ColonisationConstructionDepotEvent, buildID string, marketID int64) error {
+	if !e.ConstructionComplete {
+		return nil
+	}
+	if err := r.API.CompleteProject(ctx, buildID); err != nil {
+		r.emit(LevelError, "Mark complete %s failed: %v", buildID, err)
+		return err
+	}
+	r.emit(LevelOK, "Marked build %s complete", buildID)
+	r.Session.RememberBuild(marketID, "")
+	return nil
 }
 
 func contributionsFromEvent(e journal.ColonisationContributionEvent) ravencolonial.Contribution {

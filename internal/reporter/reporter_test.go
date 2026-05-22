@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"reflect"
 	"testing"
@@ -438,6 +439,7 @@ func TestHandleCarrierJump_DoesNotClaimOwnershipOfOtherFC(t *testing.T) {
 type fakeAPI struct {
 	lookups        []lookupCall
 	updates        []ravencolonial.ProjectUpdate
+	creates        []ravencolonial.ProjectCreate
 	completes      []string
 	contributions  []contributionCall
 	fcPuts         []ravencolonial.FleetCarrier
@@ -445,6 +447,8 @@ type fakeAPI struct {
 	fcCargoPatches []fcCargoCall
 	lookupResp     map[lookupKey]*ravencolonial.Project
 	lookupErr      map[lookupKey]error
+	createResp     *ravencolonial.Project
+	createErr      error
 	updateErr      error
 	fcPutErr       error
 	fcCargoErr     error
@@ -485,6 +489,26 @@ func (f *fakeAPI) ProjectBySystemMarket(_ context.Context, sysAddr, marketID int
 func (f *fakeAPI) UpdateProject(_ context.Context, u ravencolonial.ProjectUpdate) error {
 	f.updates = append(f.updates, u)
 	return f.updateErr
+}
+
+func (f *fakeAPI) CreateProject(_ context.Context, p ravencolonial.ProjectCreate) (*ravencolonial.Project, error) {
+	f.creates = append(f.creates, p)
+	if f.createErr != nil {
+		return nil, f.createErr
+	}
+	if f.createResp != nil {
+		return f.createResp, nil
+	}
+	// Synthesize a reasonable default: build ID = "auto-" + market.
+	return &ravencolonial.Project{
+		BuildID:       fmt.Sprintf("auto-%d", p.MarketID),
+		BuildName:     p.BuildName,
+		SystemName:    p.SystemName,
+		SystemAddress: p.SystemAddress,
+		MarketID:      p.MarketID,
+		MaxNeed:       p.MaxNeed,
+		Commodities:   p.Commodities,
+	}, nil
 }
 
 func (f *fakeAPI) CompleteProject(_ context.Context, buildID string) error {
@@ -577,8 +601,9 @@ func TestHandleDepot_LooksUpAndUpdates(t *testing.T) {
 	if !reflect.DeepEqual(u.Commodities, want) {
 		t.Errorf("commodities = %+v, want %+v", u.Commodities, want)
 	}
-	if u.MaxNeed != 600 {
-		t.Errorf("maxNeed = %d, want 600", u.MaxNeed)
+	// MaxNeed = sum of all RequiredAmount (1000 + 500), matching SrvSurvey.
+	if u.MaxNeed != 1500 {
+		t.Errorf("maxNeed = %d, want 1500 (sum of RequiredAmount)", u.MaxNeed)
 	}
 	if got, _ := sess.BuildFor(3789012345); got != "build-1" {
 		t.Errorf("buildId not cached: %q", got)
@@ -617,19 +642,115 @@ func TestHandleDepot_CachesBuildIDAcrossEvents(t *testing.T) {
 	}
 }
 
-func TestHandleDepot_NotFoundSkipsQuietly(t *testing.T) {
+func TestHandleDepot_NotFoundTriggersCreate(t *testing.T) {
 	sess := setupSession()
-	api := &fakeAPI{} // empty: all lookups 404
+	api := &fakeAPI{} // empty lookupResp → 404 from fake; createResp nil → synthesised
 	r := New(api, sess)
 	raw := mustRaw(t, journal.EventColonisationConstructionDepot, map[string]any{
-		"MarketID":             3789012345,
-		"ResourcesRequired":    []map[string]any{{"Name": "$titanium_name;", "RequiredAmount": 100, "ProvidedAmount": 0}},
+		"MarketID":          3789012345,
+		"ResourcesRequired": []map[string]any{{"Name": "$titanium_name;", "RequiredAmount": 1000, "ProvidedAmount": 0}},
 	})
 	if err := r.HandleEvent(context.Background(), raw); err != nil {
 		t.Fatalf("HandleEvent: %v", err)
 	}
+	if len(api.creates) != 1 {
+		t.Fatalf("expected one CreateProject call; got %d", len(api.creates))
+	}
+	p := api.creates[0]
+	if p.MarketID != 3789012345 || p.SystemAddress != 10477373803 || p.SystemName != "Sol" {
+		t.Errorf("create payload identity wrong: %+v", p)
+	}
+	if p.Commodities["titanium"] != 1000 {
+		t.Errorf("create outstanding titanium = %d, want 1000", p.Commodities["titanium"])
+	}
+	if p.MaxNeed != 1000 {
+		t.Errorf("create MaxNeed = %d, want 1000", p.MaxNeed)
+	}
+	if p.ArchitectName != "Jameson" {
+		t.Errorf("ArchitectName = %q, want Jameson", p.ArchitectName)
+	}
+	if cmds := p.Commanders["Jameson"]; cmds == nil {
+		t.Errorf("Commanders map should seed the architect: %+v", p.Commanders)
+	}
+	// The fake synthesises a buildId from the market id.
+	gotID, _ := sess.BuildFor(3789012345)
+	if gotID != "auto-3789012345" {
+		t.Errorf("session did not cache new buildId; got %q", gotID)
+	}
+	// No regular UpdateProject — create already POSTed the snapshot.
 	if len(api.updates) != 0 {
-		t.Errorf("should not have updated for 404 lookup")
+		t.Errorf("expected zero post-create updates; got %d", len(api.updates))
+	}
+}
+
+func TestHandleDepot_CreatedPrimaryPort(t *testing.T) {
+	sess := state.New()
+	sess.SetCommander("Jameson", "F1")
+	sess.SetSystemWithPos("Sol", 10477373803, [3]float64{0, 0, 0})
+	// Docked at a colonisation ship — should be flagged as primary port.
+	sess.SetDocked("$EXT_PNL_ColonisationShip:#index=1;", 3789012345, 10477373803)
+
+	api := &fakeAPI{}
+	r := New(api, sess)
+	raw := mustRaw(t, journal.EventColonisationConstructionDepot, map[string]any{
+		"MarketID":          3789012345,
+		"ResourcesRequired": []map[string]any{{"Name": "$titanium_name;", "RequiredAmount": 100, "ProvidedAmount": 0}},
+	})
+	if err := r.HandleEvent(context.Background(), raw); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if len(api.creates) != 1 {
+		t.Fatalf("creates = %d", len(api.creates))
+	}
+	p := api.creates[0]
+	if !p.IsPrimaryPort {
+		t.Error("IsPrimaryPort should be true for a colonisation-ship dock")
+	}
+	if p.BuildName != "Primary port" {
+		t.Errorf("BuildName = %q, want Primary port", p.BuildName)
+	}
+	if p.BuildType != "primary-port" {
+		t.Errorf("BuildType = %q, want primary-port", p.BuildType)
+	}
+}
+
+func TestHandleDepot_CreateSkippedWithoutCommander(t *testing.T) {
+	sess := state.New()
+	sess.SetSystemWithPos("Sol", 10477373803, [3]float64{0, 0, 0})
+	sess.SetDocked("X", 3789012345, 10477373803)
+	// No commander set.
+	api := &fakeAPI{}
+	r := New(api, sess)
+	raw := mustRaw(t, journal.EventColonisationConstructionDepot, map[string]any{
+		"MarketID":          3789012345,
+		"ResourcesRequired": []map[string]any{{"Name": "$titanium_name;", "RequiredAmount": 100, "ProvidedAmount": 0}},
+	})
+	if err := r.HandleEvent(context.Background(), raw); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if len(api.creates) != 0 {
+		t.Errorf("create should be skipped without a commander; got %d", len(api.creates))
+	}
+}
+
+func TestDeriveBuildName(t *testing.T) {
+	cases := map[string]string{
+		// Colonisation-ship variants — SrvSurvey collapses all of them
+		// to "Primary port" regardless of any appended text.
+		"System Colonisation Ship":              "Primary port",
+		"$EXT_PANEL_ColonisationShip; foo":      "Primary port",
+		"$EXT_PANEL_ColonisationShip:#index=1;": "Primary port",
+		"$EXT_PNL_ColonisationShip:#index=1;":   "Primary port",
+		// Regular construction sites — strip the prefix, trim.
+		"Orbital Construction Site: Belshaw Berth":   "Belshaw Berth",
+		"Planetary Construction Site: Belshaw Berth": "Belshaw Berth",
+		"Some Random Station":                        "Some Random Station",
+		"":                                           "",
+	}
+	for in, want := range cases {
+		if got := deriveBuildName(in); got != want {
+			t.Errorf("deriveBuildName(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 
