@@ -10,12 +10,14 @@ package gui
 import (
 	"context"
 	"image/color"
+	"net/url"
 	"time"
 
 	"fyne.io/fyne/v2"
 	fyneapp "fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
@@ -103,6 +105,9 @@ func (a *App) show(ctx context.Context) {
 
 	// Keyboard shortcuts — standard desktop conventions.
 	a.registerShortcuts(tabs)
+
+	// Menubar — gives the app a real Quit / About / Shortcuts entry point.
+	a.window.SetMainMenu(a.buildMenu(tabs))
 
 	// Thin orange divider line under the status bar — same trick the ED
 	// in-game HUD uses to separate header from body.
@@ -261,6 +266,92 @@ func dashIfEmpty(s string) string {
 		return "—"
 	}
 	return s
+}
+
+// buildMenu builds the main menu bar. File contains Refresh + Quit;
+// Help has the keyboard-shortcut reference and the About dialog.
+func (a *App) buildMenu(tabs *container.AppTabs) *fyne.MainMenu {
+	refresh := fyne.NewMenuItem("Refresh projects", func() { a.projects.refreshNow() })
+	refresh.Shortcut = &fyne.ShortcutPaste{} // placeholder; shortcuts wired via Canvas already
+	quit := fyne.NewMenuItem("Quit", func() { a.window.Close() })
+
+	fileMenu := fyne.NewMenu("File", refresh, fyne.NewMenuItemSeparator(), quit)
+
+	repo := fyne.NewMenuItem("Open repository", func() {
+		_ = web.OpenBrowser("https://github.com/pequalsnp/ed-colonization-reporter")
+	})
+	shortcuts := fyne.NewMenuItem("Keyboard shortcuts…", a.showShortcutsDialog)
+	about := fyne.NewMenuItem("About", a.showAboutDialog)
+
+	helpMenu := fyne.NewMenu("Help", shortcuts, repo, fyne.NewMenuItemSeparator(), about)
+
+	return fyne.NewMainMenu(fileMenu, helpMenu)
+}
+
+func (a *App) showAboutDialog() {
+	body := container.NewVBox(
+		labelLarge("ED Colonization Reporter"),
+		labelMuted("Version "+a.srv.GetVersion()),
+		widget.NewLabel(""),
+		labelWrapped(
+			"Linux-first colonization tracking and journal relay for Elite Dangerous. "+
+				"Reports to ravencolonial.com and optionally EDDN, EDSM, Inara, and Frontier's cAPI.",
+		),
+		widget.NewLabel(""),
+		labelMuted("MIT License — © 2026 Kyle Galloway"),
+		widget.NewHyperlink("github.com/pequalsnp/ed-colonization-reporter",
+			mustURL("https://github.com/pequalsnp/ed-colonization-reporter")),
+	)
+	dlg := dialog.NewCustom("About", "Close", body, a.window)
+	dlg.Resize(fyne.NewSize(440, 260))
+	dlg.Show()
+}
+
+func (a *App) showShortcutsDialog() {
+	rows := [][2]string{
+		{"Ctrl+R / F5", "Refresh projects"},
+		{"Ctrl+1", "Projects tab"},
+		{"Ctrl+2", "Activity tab"},
+		{"Ctrl+3", "Settings tab"},
+		{"Ctrl+Q", "Quit"},
+	}
+	grid := container.New(layout.NewFormLayout())
+	for _, r := range rows {
+		k := canvas.NewText(r[0], edFg)
+		k.TextStyle = fyne.TextStyle{Bold: true, Monospace: true}
+		k.TextSize = 12
+		v := canvas.NewText(r[1], edFgMuted)
+		v.TextSize = 12
+		grid.Add(k)
+		grid.Add(v)
+	}
+	dlg := dialog.NewCustom("Keyboard shortcuts", "Close", grid, a.window)
+	dlg.Resize(fyne.NewSize(360, 220))
+	dlg.Show()
+}
+
+func labelLarge(s string) fyne.CanvasObject {
+	t := canvas.NewText(s, edFg)
+	t.TextStyle = fyne.TextStyle{Bold: true}
+	t.TextSize = 16
+	return t
+}
+
+func labelMuted(s string) fyne.CanvasObject {
+	t := canvas.NewText(s, edFgMuted)
+	t.TextSize = 12
+	return t
+}
+
+func labelWrapped(s string) fyne.CanvasObject {
+	l := widget.NewLabel(s)
+	l.Wrapping = fyne.TextWrapWord
+	return l
+}
+
+func mustURL(s string) *url.URL {
+	u, _ := url.Parse(s)
+	return u
 }
 
 // registerShortcuts wires standard desktop keyboard shortcuts. Fyne's
