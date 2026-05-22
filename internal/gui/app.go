@@ -185,9 +185,20 @@ func (a *App) show(ctx context.Context) {
 func (a *App) runStatusBarLoop(ctx context.Context) {
 	t := time.NewTicker(2 * time.Second)
 	defer t.Stop()
+	var lastTitle string
 	update := func() {
 		snap := a.srv.Session().Snapshot()
 		fyne.Do(func() { a.statusBar.update(snap.Commander, snap.StarSystem, snap.Docked, snap.StationName) })
+		// Window title reflects the current commander when known; helps
+		// find the right window in Alt-Tab when multiple Fyne apps run.
+		title := "ED Colonization Reporter"
+		if snap.Commander != "" {
+			title += " — " + snap.Commander
+		}
+		if title != lastTitle {
+			lastTitle = title
+			fyne.Do(func() { a.window.SetTitle(title) })
+		}
 	}
 	update()
 	for {
