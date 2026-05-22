@@ -85,13 +85,9 @@ func newProjectsPanel(srv *web.Server) *projectsPanel {
 	p.cards = container.NewVBox()
 	p.scroll = container.NewVScroll(p.cards)
 
-	emptyText := canvas.NewText("No active projects yet.", edFgMuted)
-	emptyText.TextSize = 14
-	emptyText.Alignment = fyne.TextAlignCenter
-	hint := canvas.NewText("Dock at a construction depot in-game and it'll appear here.", edFgDim)
-	hint.TextSize = 12
-	hint.Alignment = fyne.TextAlignCenter
-	p.empty = container.NewCenter(container.NewVBox(emptyText, hint))
+	// Empty state is built dynamically per render so the message can adapt
+	// to whether the commander is known yet.
+	p.empty = container.NewCenter(container.NewVBox())
 	p.empty.Hide()
 
 	return p
@@ -194,6 +190,8 @@ func (p *projectsPanel) rerender() {
 
 		p.cards.RemoveAll()
 		if len(filtered) == 0 && errMsg == "" {
+			p.empty.Objects = []fyne.CanvasObject{buildEmptyState(cmdr, filter != "")}
+			p.empty.Refresh()
 			p.empty.Show()
 		} else {
 			p.empty.Hide()
@@ -291,6 +289,49 @@ func totalOutstanding(m map[string]int) int {
 // sortStable is sort.SliceStable; wrapped to keep the call site tidy.
 func sortStable(rows []ravencolonial.Project, less func(i, j int) bool) {
 	stableSort(rows, less)
+}
+
+// buildEmptyState chooses the right onboarding message based on
+// whether the user has been seen by the app yet, or just has a busy
+// filter that matches nothing.
+func buildEmptyState(commander string, filterActive bool) fyne.CanvasObject {
+	if filterActive {
+		title := canvas.NewText("No projects match your filter.", edFgMuted)
+		title.TextSize = 14
+		title.Alignment = fyne.TextAlignCenter
+		hint := canvas.NewText("Clear the search field to see all projects.", edFgDim)
+		hint.TextSize = 12
+		hint.Alignment = fyne.TextAlignCenter
+		return container.NewVBox(title, hint)
+	}
+	if commander == "" {
+		title := canvas.NewText("Waiting for Elite Dangerous…", edFgMuted)
+		title.TextSize = 16
+		title.Alignment = fyne.TextAlignCenter
+		l1 := canvas.NewText("1. Launch Elite Dangerous.", edFgDim)
+		l1.TextSize = 12
+		l2 := canvas.NewText("2. Open the cockpit so the game writes a Journal entry.", edFgDim)
+		l2.TextSize = 12
+		l3 := canvas.NewText("3. The status bar above will show your commander.", edFgDim)
+		l3.TextSize = 12
+		l4 := canvas.NewText("4. Dock at a construction depot to start tracking a build.", edFgDim)
+		l4.TextSize = 12
+		hint := canvas.NewText("If nothing happens after a few minutes, check Settings → Journal Directory.", edFgDim)
+		hint.TextSize = 11
+		hint.Alignment = fyne.TextAlignCenter
+		return container.NewVBox(title, container.NewPadded(container.NewVBox(l1, l2, l3, l4)), hint)
+	}
+	title := canvas.NewText("No active projects yet.", edFgMuted)
+	title.TextSize = 14
+	title.Alignment = fyne.TextAlignCenter
+	hint := canvas.NewText(
+		"Dock at a construction depot in-game and it'll appear here. The app "+
+			"creates a ravencolonial project automatically on first sight.",
+		edFgDim)
+	hint.TextSize = 12
+	hint.Alignment = fyne.TextAlignCenter
+	hint.TextStyle = fyne.TextStyle{Italic: true}
+	return container.NewVBox(title, container.NewPadded(hint))
 }
 
 // filterProjects applies the case-insensitive search filter to the list,

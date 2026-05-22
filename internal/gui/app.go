@@ -363,7 +363,20 @@ func (a *App) buildMenu(tabs *container.AppTabs) *fyne.MainMenu {
 	shortcuts := fyne.NewMenuItem("Keyboard shortcuts…", a.showShortcutsDialog)
 	about := fyne.NewMenuItem("About", a.showAboutDialog)
 
-	helpMenu := fyne.NewMenu("Help", shortcuts, repo, fyne.NewMenuItemSeparator(), about)
+	// External destination quick-links so a new user can find the
+	// ravencolonial / EDDN / EDSM / Inara homepages without leaving
+	// the app — discovering "where do I get an API key?" matters.
+	openLink := func(url string) func() { return func() { _ = web.OpenBrowser(url) } }
+	links := fyne.NewMenuItem("Destination websites", nil)
+	links.ChildMenu = fyne.NewMenu("",
+		fyne.NewMenuItem("ravencolonial.com", openLink("https://ravencolonial.com/")),
+		fyne.NewMenuItem("EDDN", openLink("https://eddn.edcd.io/")),
+		fyne.NewMenuItem("EDSM — get API key", openLink("https://www.edsm.net/en/settings/api")),
+		fyne.NewMenuItem("Inara — get API key", openLink("https://inara.cz/settings-api/")),
+		fyne.NewMenuItem("Frontier developer zone", openLink("https://user.frontierstore.net/")),
+	)
+
+	helpMenu := fyne.NewMenu("Help", shortcuts, links, repo, fyne.NewMenuItemSeparator(), about)
 
 	return fyne.NewMainMenu(fileMenu, helpMenu)
 }
