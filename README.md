@@ -54,17 +54,24 @@ not yet implemented.
 
 ### From source
 
-Requires Go 1.24+. No CGO and no system dependencies — a single static
-binary on every platform.
+Requires Go 1.24+. The UI is built with [Fyne](https://fyne.io), which
+needs a C compiler and OpenGL/X11 dev headers on Linux. On Arch/CachyOS:
 
 ```
-CGO_ENABLED=0 go build -o edcolreport ./cmd/edcolreport
+sudo pacman -S --needed base-devel libxcursor libxrandr libxinerama libxi \
+    mesa libxxf86vm pkg-config
+```
+
+Build the binary:
+
+```
+go build -o edcolreport ./cmd/edcolreport
 ./edcolreport
 ```
 
-The binary starts a local HTTP server on a random loopback port and opens
-your default browser to it. On Linux you can pass `--no-browser` and follow
-the printed URL instead.
+The binary opens a native window. A small HTTP listener also runs on a
+random loopback port to receive the Frontier OAuth redirect; you can use
+`--headless` to disable the GUI and run backend-only (useful for debugging).
 
 ### Pre-built releases
 
@@ -104,13 +111,15 @@ The CI workflow runs the same on every push.
 
 ### Design choices
 
-- **Browser UI, not a native desktop app.** The binary spins up a local
-  HTTP server on a random loopback port and opens your default browser
-  to it. This avoids any CGO/GUI-framework dependency, so the binary is a
-  single ~10 MB static executable on every platform with no system libs
-  required. The downside is the UI is a browser tab, not a window.
-- **Pure Go.** `CGO_ENABLED=0` everywhere. Cross-compile to Windows
-  amd64 from Linux is `GOOS=windows go build`, no toolchain dance.
+- **Native Fyne window.** Pure-Go GUI on Linux isn't possible without
+  going through a browser engine, so we accept CGO for the UI layer.
+  Backend code (journal tail, ravencolonial/EDDN/EDSM/Inara, Frontier
+  cAPI) stays pure-Go.
+- **Backend HTTP server still exists.** A tiny loopback listener handles
+  the Frontier OAuth redirect (Frontier requires HTTPS, so we route the
+  callback through a static GitHub Pages page that forwards to localhost).
+- **Cross-compile** to Windows uses [fyne-cross](https://github.com/fyne-io/fyne-cross)
+  (Docker-based). macOS is unsupported by the release workflow.
 
 ## Acknowledgements
 

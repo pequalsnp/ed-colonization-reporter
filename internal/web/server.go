@@ -91,6 +91,143 @@ func (s *Server) URL() string {
 	return "http://" + s.listener.Addr().String()
 }
 
+// Session exposes the live state.Session so in-process consumers (the
+// Fyne GUI) can read commander, system, dock, etc. directly without
+// going through JSON.
+func (s *Server) Session() *state.Session {
+	return s.session
+}
+
+// Subscribe returns a channel of reporter.Status events. The returned
+// cancel function MUST be called to release the subscription. Used by
+// the GUI's Activity panel.
+func (s *Server) Subscribe() (<-chan reporter.Status, func()) {
+	return s.hub.Subscribe()
+}
+
+// Version returns the build version that was passed in.
+func (s *Server) GetVersion() string { return s.Version }
+
+// Config returns a copy of the current config. Safe to read concurrently.
+func (s *Server) Config() config.Config {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cfg
+}
+
+// ApplyConfig persists a new config and hot-updates every destination
+// that supports runtime reconfiguration (EDDN, EDSM, Inara, Frontier
+// cAPI, ravencolonial client). The GUI calls this from its settings
+// panel.
+func (s *Server) ApplyConfig(newCfg config.Config) error {
+	if newCfg.APIBaseURL == "" {
+		newCfg.APIBaseURL = ravencolonial.DefaultBaseURL
+	}
+	if err := config.Save(newCfg); err != nil {
+		return fmt.Errorf("save config: %w", err)
+	}
+	s.mu.Lock()
+	prevCAPI := s.cfg.FrontierCAPIEnabled
+	s.cfg = newCfg
+	s.client = ravencolonial.New(
+		ravencolonial.WithBaseURL(newCfg.APIBaseURL),
+		ravencolonial.WithAPIKey(newCfg.APIKey),
+	)
+	s.rep = reporter.New(s.client, s.session)
+	s.rep.JournalDir = resolveJournalDir(newCfg.JournalDir)
+	s.rep.OnStatus(s.hub.Publish)
+	if newCfg.CommanderOverride != "" {
+		s.session.SetCommander(newCfg.CommanderOverride, "")
+	}
+	if s.eddn != nil {
+		s.eddn.SetEnabled(newCfg.EDDNEnabled)
+		s.eddn.JournalDir = resolveJournalDir(newCfg.JournalDir)
+	}
+	if s.edsm != nil {
+		s.edsm.SetAPIKey(newCfg.EDSMAPIKey)
+		s.edsm.SetEnabled(newCfg.EDSMEnabled)
+	}
+	if s.inara != nil {
+		s.inara.SetAPIKey(newCfg.InaraAPIKey)
+		s.inara.SetEnabled(newCfg.InaraEnabled)
+	}
+	if s.mux != nil {
+		s.mux.Replace(s.rep, s.eddn, s.edsm, s.inara)
+	}
+	shouldKick := newCfg.FrontierCAPIEnabled && !prevCAPI
+	s.mu.Unlock()
+	if shouldKick {
+		s.kickFrontierSync()
+	}
+	s.hub.Publish(reporter.Status{
+		Time: time.Now(), Level: reporter.LevelOK,
+		Message: "Settings saved.",
+	})
+	return nil
+}
+
+// ActiveProjects fetches the commander's active builds from ravencolonial.
+// Used by the GUI's Projects panel.
+func (s *Server) ActiveProjects(ctx context.Context) ([]ravencolonial.Project, string, error) {
+	cmdr := s.session.Commander()
+	if cmdr == "" && s.cfg.CommanderOverride != "" {
+		cmdr = s.cfg.CommanderOverride
+	}
+	if cmdr == "" {
+		return nil, "", nil
+	}
+	cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	ps, err := s.client.ActiveProjects(cctx, cmdr)
+	return ps, cmdr, err
+}
+
+// FrontierStartSignin generates a new auth URL for the user's browser.
+func (s *Server) FrontierStartSignin() (string, error) {
+	s.mu.Lock()
+	ln := s.listener
+	s.mu.Unlock()
+	if ln == nil {
+		return "", errors.New("server not bound")
+	}
+	addr, ok := ln.Addr().(*net.TCPAddr)
+	if !ok {
+		return "", errors.New("server not bound to TCP")
+	}
+	return s.frontierFlow.Start(addr.Port)
+}
+
+// FrontierStatus reports whether tokens are present + their expiry. The
+// (false, time.Time{}, nil) tuple means "not signed in."
+func (s *Server) FrontierStatus() (signedIn bool, expiresAt time.Time, expired bool) {
+	tok, err := s.frontierStore.Load()
+	if err != nil || tok == nil || tok.AccessToken == "" {
+		return false, time.Time{}, false
+	}
+	return true, tok.ExpiresAt, tok.Expired()
+}
+
+// FrontierClientID returns the OAuth client_id currently in use.
+func (s *Server) FrontierClientID() string {
+	if s.frontierFlow == nil {
+		return ""
+	}
+	return s.frontierFlow.ClientID
+}
+
+// FrontierSignout discards stored tokens.
+func (s *Server) FrontierSignout() error {
+	if err := s.frontierStore.Clear(); err != nil {
+		return err
+	}
+	s.frontierCAPI.SetTokens(nil)
+	s.hub.Publish(reporter.Status{
+		Time: time.Now(), Level: reporter.LevelInfo,
+		Message: "Signed out of Frontier",
+	})
+	return nil
+}
+
 // Start binds the listener, wires the reporter/tailer, and serves until ctx
 // is cancelled. Returns nil on clean shutdown, an error otherwise.
 func (s *Server) Start(ctx context.Context) error {

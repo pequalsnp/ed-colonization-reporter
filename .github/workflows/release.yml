@@ -1,0 +1,101 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+# Only one release workflow at a time per tag.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-linux-amd64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Fyne build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc pkg-config \
+            libgl1-mesa-dev libxcursor-dev libxrandr-dev \
+            libxinerama-dev libxi-dev libxxf86vm-dev xorg-dev
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Build linux/amd64
+        env:
+          CGO_ENABLED: '1'
+        run: |
+          mkdir -p dist
+          go build -trimpath -ldflags="-s -w -X main.version=${GITHUB_REF_NAME}" \
+            -o dist/edcolreport-${GITHUB_REF_NAME}-linux-amd64 \
+            ./cmd/edcolreport
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-amd64
+          path: dist/
+
+  build-windows-amd64:
+    # fyne-cross runs in a docker container and produces the Windows .exe
+    # without needing a Windows runner. Saves on minutes (Windows runners
+    # are weighted 2x) and avoids cross-platform CI weirdness.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Install fyne-cross
+        run: go install github.com/fyne-io/fyne-cross@latest
+
+      - name: Build windows/amd64
+        run: |
+          mkdir -p dist
+          fyne-cross windows -arch=amd64 \
+            -app-id=ca.thegalloways.edcolreport \
+            -name=edcolreport-${GITHUB_REF_NAME}-windows-amd64 \
+            -ldflags="-X main.version=${GITHUB_REF_NAME}" \
+            ./cmd/edcolreport
+          # fyne-cross drops artifacts under fyne-cross/dist/windows-amd64/
+          cp fyne-cross/dist/windows-amd64/edcolreport-${GITHUB_REF_NAME}-windows-amd64.exe dist/ \
+            || cp fyne-cross/dist/windows-amd64/*.exe dist/edcolreport-${GITHUB_REF_NAME}-windows-amd64.exe
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-amd64
+          path: dist/
+
+  publish:
+    needs: [build-linux-amd64, build-windows-amd64]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist-merged
+          merge-multiple: true
+
+      - name: SHA256SUMS
+        working-directory: dist-merged
+        run: sha256sum * > SHA256SUMS
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --prerelease \
+            --generate-notes \
+            dist-merged/*
