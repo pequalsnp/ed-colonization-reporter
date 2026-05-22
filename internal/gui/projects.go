@@ -132,7 +132,8 @@ func (p *projectsPanel) rerender() {
 }
 
 // buildProjectCard renders one project as a self-contained card with
-// system, build name, status badge, progress bar, and outstanding count.
+// system, build name, status badge, progress bar, outstanding count,
+// and the top outstanding commodities.
 func buildProjectCard(p ravencolonial.Project) fyne.CanvasObject {
 	systemName := p.SystemName
 	if systemName == "" {
@@ -169,10 +170,13 @@ func buildProjectCard(p ravencolonial.Project) fyne.CanvasObject {
 		return fmt.Sprintf("%.0f%%", progress*100)
 	}
 
-	outstandingLbl := canvas.NewText(fmt.Sprintf("%s units outstanding", humanCount(outstanding)), edFgMuted)
-	outstandingLbl.TextSize = 12
+	summary := canvas.NewText(fmt.Sprintf("%s units outstanding", humanCount(outstanding)), edFgMuted)
+	summary.TextSize = 12
 
-	body := container.NewVBox(bar, outstandingLbl)
+	body := container.NewVBox(bar, summary)
+	if outstanding > 0 {
+		body.Add(commoditiesLine(p.Commodities))
+	}
 
 	card := container.NewVBox(
 		container.NewPadded(header),
@@ -185,6 +189,48 @@ func buildProjectCard(p ravencolonial.Project) fyne.CanvasObject {
 	bg.StrokeColor = edBorder
 	bg.StrokeWidth = 1
 	return container.NewPadded(container.NewStack(bg, card))
+}
+
+// commoditiesLine renders the top outstanding commodities as a compact
+// dot-separated row, with a "+N more" trailer when there are more than
+// the visible cap. Quantity is shown in bold + foreground colour;
+// commodity name in muted.
+func commoditiesLine(commodities map[string]int) fyne.CanvasObject {
+	const cap = 5
+	top := topCommodities(commodities, cap)
+	if len(top) == 0 {
+		return container.NewWithoutLayout()
+	}
+
+	row := container.NewHBox()
+	for i, c := range top {
+		if i > 0 {
+			sep := canvas.NewText("·", edFgDim)
+			sep.TextSize = 12
+			row.Add(container.NewPadded(sep))
+		}
+		qty := canvas.NewText(humanCount(c.Count), edFg)
+		qty.TextSize = 12
+		qty.TextStyle = fyne.TextStyle{Bold: true}
+		name := canvas.NewText(PrettifyCommodity(c.Symbol), edFgMuted)
+		name.TextSize = 12
+		row.Add(qty)
+		row.Add(name)
+	}
+
+	more := 0
+	for _, n := range commodities {
+		if n > 0 {
+			more++
+		}
+	}
+	more -= len(top)
+	if more > 0 {
+		tail := canvas.NewText(fmt.Sprintf("· +%d more", more), edFgDim)
+		tail.TextSize = 12
+		row.Add(container.NewPadded(tail))
+	}
+	return container.NewHScroll(row)
 }
 
 func statusBadgeText(p ravencolonial.Project) string {
