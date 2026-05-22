@@ -2,8 +2,11 @@ package gui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -41,6 +44,11 @@ type settingsPanel struct {
 	// for the ravencolonial API.
 	rcTestStatus *canvas.Text
 	rcTestBtn    *widget.Button
+
+	edsmTestStatus  *canvas.Text
+	edsmTestBtn     *widget.Button
+	inaraTestStatus *canvas.Text
+	inaraTestBtn    *widget.Button
 }
 
 func newSettingsPanel(srv *web.Server) *settingsPanel {
@@ -71,6 +79,16 @@ func newSettingsPanel(srv *web.Server) *settingsPanel {
 	p.inaraEnabled = widget.NewCheck("Enable", nil)
 	p.inaraEnabled.SetChecked(cfg.InaraEnabled)
 	p.inaraKey = passwordEntry(cfg.InaraAPIKey, "from inara.cz/settings-api/")
+
+	p.edsmTestStatus = canvas.NewText("", edFgMuted)
+	p.edsmTestStatus.TextSize = 11
+	p.edsmTestBtn = widget.NewButtonWithIcon("Test", theme.ConfirmIcon(), func() { go p.testEDSM() })
+	p.edsmTestBtn.Importance = widget.LowImportance
+
+	p.inaraTestStatus = canvas.NewText("", edFgMuted)
+	p.inaraTestStatus.TextSize = 11
+	p.inaraTestBtn = widget.NewButtonWithIcon("Test", theme.ConfirmIcon(), func() { go p.testInara() })
+	p.inaraTestBtn.Importance = widget.LowImportance
 	p.frontierCAPIEnabled = widget.NewCheck("Use cAPI for FC inventory ground-truth", nil)
 	p.frontierCAPIEnabled.SetChecked(cfg.FrontierCAPIEnabled)
 
@@ -148,6 +166,174 @@ func countJournalFiles(dir string) int {
 	return len(files)
 }
 
+// testEDSM probes the EDSM journal endpoint. With an API key we POST a
+// minimal events array so EDSM validates auth and returns msgnum;
+// without one we GET the public discard list as a reachability check.
+func (p *settingsPanel) testEDSM() {
+	cmdr := p.srv.Session().Commander()
+	if cmdr == "" {
+		cmdr = "test"
+	}
+	apiKey := strings.TrimSpace(p.edsmKey.Text)
+	fyne.Do(func() {
+		p.edsmTestStatus.Text = "Testing…"
+		p.edsmTestStatus.Color = edFgMuted
+		p.edsmTestStatus.Refresh()
+		p.edsmTestBtn.Disable()
+	})
+	defer fyne.Do(func() { p.edsmTestBtn.Enable() })
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	if apiKey == "" {
+		req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet,
+			"https://www.edsm.net/api-journal-v1/discard", nil)
+		resp, err := client.Do(req)
+		p.reportTest(p.edsmTestStatus, resp, err, "EDSM reachable (no API key set; key not validated)")
+		return
+	}
+	form := url.Values{
+		"commanderName":       {cmdr},
+		"apiKey":              {apiKey},
+		"fromSoftware":        {"edcolreport"},
+		"fromSoftwareVersion": {p.srv.GetVersion()},
+		"message":             {"[]"},
+	}
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost,
+		"https://www.edsm.net/api-journal-v1", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := client.Do(req)
+	if err != nil {
+		fyne.Do(func() {
+			p.edsmTestStatus.Text = "✗ " + err.Error()
+			p.edsmTestStatus.Color = edStatusError
+			p.edsmTestStatus.Refresh()
+		})
+		return
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	var reply struct {
+		MsgNum int    `json:"msgnum"`
+		Msg    string `json:"msg"`
+	}
+	_ = json.Unmarshal(body, &reply)
+	fyne.Do(func() {
+		switch {
+		case reply.MsgNum/100 == 1:
+			p.edsmTestStatus.Text = fmt.Sprintf("✓ EDSM accepted the key (msg %d: %s)", reply.MsgNum, reply.Msg)
+			p.edsmTestStatus.Color = edStatusOK
+		case reply.MsgNum >= 200:
+			p.edsmTestStatus.Text = fmt.Sprintf("✗ EDSM rejected the key (msg %d: %s)", reply.MsgNum, reply.Msg)
+			p.edsmTestStatus.Color = edStatusError
+		default:
+			p.edsmTestStatus.Text = fmt.Sprintf("? HTTP %d, body: %s", resp.StatusCode, truncate(string(body), 120))
+			p.edsmTestStatus.Color = edStatusWarn
+		}
+		p.edsmTestStatus.Refresh()
+	})
+}
+
+// testInara probes the Inara API. With an API key set, posts a minimal
+// request and reads the header.eventStatus to validate auth.
+func (p *settingsPanel) testInara() {
+	cmdr := p.srv.Session().Commander()
+	if cmdr == "" {
+		cmdr = "test"
+	}
+	apiKey := strings.TrimSpace(p.inaraKey.Text)
+	fyne.Do(func() {
+		p.inaraTestStatus.Text = "Testing…"
+		p.inaraTestStatus.Color = edFgMuted
+		p.inaraTestStatus.Refresh()
+		p.inaraTestBtn.Disable()
+	})
+	defer fyne.Do(func() { p.inaraTestBtn.Enable() })
+
+	if apiKey == "" {
+		fyne.Do(func() {
+			p.inaraTestStatus.Text = "✗ No API key set."
+			p.inaraTestStatus.Color = edStatusWarn
+			p.inaraTestStatus.Refresh()
+		})
+		return
+	}
+
+	payload := map[string]any{
+		"header": map[string]any{
+			"appName":       "edcolreport",
+			"appVersion":    p.srv.GetVersion(),
+			"APIkey":        apiKey,
+			"commanderName": cmdr,
+		},
+		"events": []any{},
+	}
+	body, _ := json.Marshal(payload)
+	client := &http.Client{Timeout: 10 * time.Second}
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost,
+		"https://inara.cz/inapi/v1/", strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		fyne.Do(func() {
+			p.inaraTestStatus.Text = "✗ " + err.Error()
+			p.inaraTestStatus.Color = edStatusError
+			p.inaraTestStatus.Refresh()
+		})
+		return
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	var reply struct {
+		Header struct {
+			EventStatus     int    `json:"eventStatus"`
+			EventStatusText string `json:"eventStatusText"`
+		} `json:"header"`
+	}
+	_ = json.Unmarshal(respBody, &reply)
+	fyne.Do(func() {
+		switch {
+		case reply.Header.EventStatus == 200:
+			p.inaraTestStatus.Text = "✓ Inara accepted the key."
+			p.inaraTestStatus.Color = edStatusOK
+		case reply.Header.EventStatus != 0:
+			p.inaraTestStatus.Text = fmt.Sprintf("✗ Inara rejected the key (%d: %s)",
+				reply.Header.EventStatus, reply.Header.EventStatusText)
+			p.inaraTestStatus.Color = edStatusError
+		default:
+			p.inaraTestStatus.Text = fmt.Sprintf("? HTTP %d, body: %s", resp.StatusCode, truncate(string(respBody), 120))
+			p.inaraTestStatus.Color = edStatusWarn
+		}
+		p.inaraTestStatus.Refresh()
+	})
+}
+
+// reportTest is a small helper for the simple HTTP-reachability probes.
+func (p *settingsPanel) reportTest(label *canvas.Text, resp *http.Response, err error, okMsg string) {
+	fyne.Do(func() {
+		if err != nil {
+			label.Text = "✗ " + err.Error()
+			label.Color = edStatusError
+		} else {
+			defer resp.Body.Close()
+			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+				label.Text = "✓ " + okMsg
+				label.Color = edStatusOK
+			} else {
+				label.Text = fmt.Sprintf("✗ HTTP %d", resp.StatusCode)
+				label.Color = edStatusError
+			}
+		}
+		label.Refresh()
+	})
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
+}
+
 // testRavencolonial probes the configured API base URL with a known
 // no-auth endpoint and updates the inline status indicator. The probe
 // uses the commander "test" because ravencolonial returns 200 with []
@@ -221,8 +407,10 @@ func (p *settingsPanel) content(frontier *frontierPanel) fyne.CanvasObject {
 	)
 
 	eddnRow := checkboxRow(p.eddnEnabled)
-	edsmRow := container.NewVBox(checkboxRow(p.edsmEnabled), formItem("API key", p.edsmKey))
-	inaraRow := container.NewVBox(checkboxRow(p.inaraEnabled), formItem("API key", p.inaraKey))
+	edsmTestRow := container.NewBorder(nil, nil, nil, p.edsmTestBtn, p.edsmTestStatus)
+	edsmRow := container.NewVBox(checkboxRow(p.edsmEnabled), formItem("API key", p.edsmKey), edsmTestRow)
+	inaraTestRow := container.NewBorder(nil, nil, nil, p.inaraTestBtn, p.inaraTestStatus)
+	inaraRow := container.NewVBox(checkboxRow(p.inaraEnabled), formItem("API key", p.inaraKey), inaraTestRow)
 
 	uploadsCard := section("Community uploads",
 		"Send journal data to third-party trackers. EDDN is anonymous; EDSM and Inara need their own API keys.",
