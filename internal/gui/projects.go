@@ -401,11 +401,7 @@ func (panel *projectsPanel) buildProjectCard(p ravencolonial.Project, expanded b
 	}
 	progress := computeProgress(p, outstanding)
 
-	bar := widget.NewProgressBar()
-	bar.SetValue(progress)
-	bar.TextFormatter = func() string {
-		return fmt.Sprintf("%.0f%%", progress*100)
-	}
+	bar := newGradientProgressBar(progress)
 
 	summary := canvas.NewText(fmt.Sprintf("%s units outstanding", humanCount(outstanding)), edFgMuted)
 	summary.TextSize = 12
