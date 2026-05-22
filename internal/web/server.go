@@ -64,6 +64,9 @@ type Server struct {
 	// Atomic for lock-free reads from the GUI's liveness indicator.
 	lastEventAt atomic.Int64
 
+	// startedAt is when New() ran; used for the About dialog uptime.
+	startedAt time.Time
+
 	hub      *statusHub
 	listener net.Listener
 	srv      *http.Server
@@ -74,7 +77,12 @@ type Server struct {
 
 // New creates a Server with the initial config.
 func New(cfg config.Config) *Server {
-	return &Server{cfg: cfg, hub: newStatusHub(), frontierTrigger: make(chan struct{}, 1)}
+	return &Server{
+		cfg:             cfg,
+		hub:             newStatusHub(),
+		frontierTrigger: make(chan struct{}, 1),
+		startedAt:       time.Now(),
+	}
 }
 
 // kickFrontierSync requests an immediate cAPI poll on the next tick of
@@ -96,6 +104,15 @@ func (s *Server) URL() string {
 	}
 	return "http://" + s.listener.Addr().String()
 }
+
+// SessionStartedAt returns when the backend Server was constructed.
+// Used by the GUI's About dialog to show session uptime.
+func (s *Server) SessionStartedAt() time.Time { return s.startedAt }
+
+// FrontierTokenPath returns the on-disk location of the persisted
+// Frontier OAuth tokens. Useful for support / backup / "where do I
+// reset this?" questions.
+func (s *Server) FrontierTokenPath() string { return resolveFrontierTokenPath() }
 
 // Session exposes the live state.Session so in-process consumers (the
 // Fyne GUI) can read commander, system, dock, etc. directly without

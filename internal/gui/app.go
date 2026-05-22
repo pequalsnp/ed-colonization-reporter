@@ -427,6 +427,13 @@ func (a *App) buildMenu(tabs *container.AppTabs) *fyne.MainMenu {
 }
 
 func (a *App) showAboutDialog() {
+	configPath := "(unknown)"
+	if p, err := config.Path(); err == nil {
+		configPath = p
+	}
+	tokenPath := a.srv.FrontierTokenPath()
+	uptime := time.Since(a.srv.SessionStartedAt())
+
 	body := container.NewVBox(
 		labelLarge("ED Colonization Reporter"),
 		labelMuted("Version "+a.srv.GetVersion()),
@@ -436,13 +443,37 @@ func (a *App) showAboutDialog() {
 				"Reports to ravencolonial.com and optionally EDDN, EDSM, Inara, and Frontier's cAPI.",
 		),
 		widget.NewLabel(""),
+		labelMuted("Session uptime: "+formatDuration(uptime)),
+		widget.NewLabel(""),
+		labelMuted("Config:"),
+		smallMono(configPath),
+		labelMuted("Frontier tokens:"),
+		smallMono(tokenPath),
+		widget.NewLabel(""),
 		labelMuted("MIT License — © 2026 Kyle Galloway"),
 		widget.NewHyperlink("github.com/pequalsnp/ed-colonization-reporter",
 			mustURL("https://github.com/pequalsnp/ed-colonization-reporter")),
 	)
 	dlg := dialog.NewCustom("About", "Close", body, a.window)
-	dlg.Resize(fyne.NewSize(440, 260))
+	dlg.Resize(fyne.NewSize(560, 420))
 	dlg.Show()
+}
+
+func smallMono(s string) fyne.CanvasObject {
+	t := canvas.NewText(s, edFg)
+	t.TextSize = 11
+	t.TextStyle = fyne.TextStyle{Monospace: true}
+	return t
+}
+
+func formatDuration(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	if d < time.Hour {
+		return fmt.Sprintf("%dm %ds", int(d.Minutes()), int(d.Seconds())%60)
+	}
+	return fmt.Sprintf("%dh %dm", int(d.Hours()), int(d.Minutes())%60)
 }
 
 func (a *App) showShortcutsDialog() {
