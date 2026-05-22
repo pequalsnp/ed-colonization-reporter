@@ -2,6 +2,7 @@ package gui
 
 import (
 	"context"
+	"fmt"
 	"image/color"
 	"time"
 
@@ -9,6 +10,7 @@ import (
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/layout"
+	"fyne.io/fyne/v2/widget"
 
 	"github.com/pequalsnp/ed-colonization-reporter/internal/web"
 )
@@ -20,9 +22,10 @@ import (
 type destBar struct {
 	srv *web.Server
 
-	chips map[string]*destChip
-	url   *canvas.Text
-	root  fyne.CanvasObject
+	chips     map[string]*destChip
+	url       *canvas.Text
+	lastEvent *canvas.Text
+	root      fyne.CanvasObject
 }
 
 type destChip struct {
@@ -45,11 +48,15 @@ func newDestBar(srv *web.Server) *destBar {
 	b.url = canvas.NewText("", edFgDim)
 	b.url.TextSize = 11
 
+	b.lastEvent = canvas.NewText("Last event: —", edFgDim)
+	b.lastEvent.TextSize = 11
+
 	left := container.NewHBox(
 		labelMutedSmall("Destinations:"),
 		row,
 	)
-	b.root = container.NewPadded(container.NewBorder(nil, nil, left, b.url, layout.NewSpacer()))
+	right := container.NewHBox(b.lastEvent, widget.NewSeparator(), b.url)
+	b.root = container.NewPadded(container.NewBorder(nil, nil, left, right, layout.NewSpacer()))
 	b.update()
 	return b
 }
@@ -93,7 +100,8 @@ func labelMutedSmall(text string) fyne.CanvasObject {
 }
 
 func (b *destBar) runLoop(ctx context.Context) {
-	t := time.NewTicker(5 * time.Second)
+	// Faster cadence for the liveness indicator — 2s feels live.
+	t := time.NewTicker(2 * time.Second)
 	defer t.Stop()
 	b.update()
 	for {
@@ -130,7 +138,43 @@ func (b *destBar) update() {
 			b.url.Text = u
 			b.url.Refresh()
 		}
+
+		// Liveness indicator: how long since the tailer processed an
+		// event. Green if very recent (game is logging), amber if
+		// stale (game probably closed), gray if never seen.
+		t := b.srv.LastEventAt()
+		if t.IsZero() {
+			b.lastEvent.Text = "Last event: —"
+			b.lastEvent.Color = edFgDim
+		} else {
+			age := time.Since(t)
+			b.lastEvent.Text = "Last event: " + humanAge(age)
+			switch {
+			case age < 30*time.Second:
+				b.lastEvent.Color = edStatusOK
+			case age < 5*time.Minute:
+				b.lastEvent.Color = edStatusInfo
+			case age < 30*time.Minute:
+				b.lastEvent.Color = edStatusWarn
+			default:
+				b.lastEvent.Color = edFgDim
+			}
+		}
+		b.lastEvent.Refresh()
 	})
+}
+
+func humanAge(d time.Duration) string {
+	if d < time.Second {
+		return "just now"
+	}
+	if d < time.Minute {
+		return fmt.Sprintf("%ds ago", int(d.Seconds()))
+	}
+	if d < time.Hour {
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	}
+	return fmt.Sprintf("%.1fh ago", d.Hours())
 }
 
 func (b *destBar) content() fyne.CanvasObject { return b.root }

@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pequalsnp/ed-colonization-reporter/internal/config"
@@ -57,6 +58,11 @@ type Server struct {
 	frontierCAPI    *frontier.CAPI
 	frontierStore   frontier.TokenStore
 	frontierTrigger chan struct{} // buffered(1): kick the cAPI poller
+
+	// lastEventAt is the wall-clock time (unix nanos) of the most
+	// recent journal event the tailer handed to the multiplex.
+	// Atomic for lock-free reads from the GUI's liveness indicator.
+	lastEventAt atomic.Int64
 
 	hub      *statusHub
 	listener net.Listener
@@ -213,6 +219,16 @@ func (s *Server) FrontierClientID() string {
 		return ""
 	}
 	return s.frontierFlow.ClientID
+}
+
+// LastEventAt returns the wall-clock time of the most recent journal
+// event the tailer processed. Returns the zero time if nothing has
+// arrived yet (game not running, journal dir misconfigured, etc.).
+func (s *Server) LastEventAt() time.Time {
+	if v := s.lastEventAt.Load(); v != 0 {
+		return time.Unix(0, v)
+	}
+	return time.Time{}
 }
 
 // FrontierSignout discards stored tokens.
@@ -433,6 +449,7 @@ func (s *Server) runTailer(ctx context.Context) {
 	for raw := range events {
 		// Multiplex dispatches to every configured destination (ravencolonial,
 		// EDDN, and any future ones). Each destination logs its own errors.
+		s.lastEventAt.Store(time.Now().UnixNano())
 		_ = s.mux.HandleEvent(ctx, raw)
 	}
 	if err := <-tailErr; err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
