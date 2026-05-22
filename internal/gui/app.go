@@ -9,20 +9,24 @@ package gui
 
 import (
 	"context"
-	"fmt"
-	"sync"
+	"image/color"
 	"time"
 
-	fyneapp "fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2"
+	fyneapp "fyne.io/fyne/v2/app"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/layout"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
-	"github.com/pequalsnp/ed-colonization-reporter/internal/config"
-	"github.com/pequalsnp/ed-colonization-reporter/internal/ravencolonial"
-	"github.com/pequalsnp/ed-colonization-reporter/internal/reporter"
 	"github.com/pequalsnp/ed-colonization-reporter/internal/web"
 )
+
+// _ keeps the color import in scope until the embedded statusBar uses
+// it (status indicators reference edFgDim et al. by value, but the
+// linter still wants the import explicit).
+var _ = color.Black
 
 // App is the Fyne window owner. It is built around a *web.Server which
 // owns all backend state — Session, destinations, Frontier OAuth, the
@@ -33,13 +37,11 @@ type App struct {
 	app    fyne.App
 	window fyne.Window
 
-	cmdrLabel, systemLabel, dockLabel *widget.Label
-	versionLabel                      *widget.Label
-
-	projects        *projectsPanel
-	activity        *activityPanel
-	settings        *settingsPanel
-	frontierPanel   *frontierPanel
+	statusBar     *statusBar
+	projects      *projectsPanel
+	activity      *activityPanel
+	settings      *settingsPanel
+	frontierPanel *frontierPanel
 }
 
 // Run starts the Fyne app and blocks until the window is closed.
@@ -53,43 +55,37 @@ func Run(ctx context.Context, srv *web.Server) {
 func newApp(srv *web.Server) *App {
 	a := &App{srv: srv}
 	a.app = fyneapp.NewWithID("ca.thegalloways.edcolreport")
+	a.app.Settings().SetTheme(&edTheme{})
+	a.app.SetIcon(appIcon())
 	a.window = a.app.NewWindow("ED Colonization Reporter")
-	a.window.Resize(fyne.NewSize(960, 680))
+	a.window.SetIcon(appIcon())
+	a.window.Resize(fyne.NewSize(960, 720))
 	return a
 }
 
 func (a *App) show(ctx context.Context) {
-	a.cmdrLabel = widget.NewLabel("Cmdr: —")
-	a.systemLabel = widget.NewLabel("System: —")
-	a.dockLabel = widget.NewLabel("Dock: —")
-	a.versionLabel = widget.NewLabel("v" + a.srv.GetVersion())
-
-	statusBar := container.NewHBox(
-		a.cmdrLabel, widget.NewSeparator(),
-		a.systemLabel, widget.NewSeparator(),
-		a.dockLabel,
-		widget.NewLabel(""), // spacer pushes version to the right when window is wide
-		a.versionLabel,
-	)
-
+	a.statusBar = newStatusBar(a.srv.GetVersion())
 	a.projects = newProjectsPanel(a.srv)
 	a.activity = newActivityPanel()
 	a.settings = newSettingsPanel(a.srv)
 	a.frontierPanel = newFrontierPanel(a.srv)
 
 	tabs := container.NewAppTabs(
-		container.NewTabItem("Projects", a.projects.content()),
-		container.NewTabItem("Activity", a.activity.content()),
-		container.NewTabItem("Settings", a.settings.content(a.frontierPanel)),
+		container.NewTabItemWithIcon("Projects", theme.GridIcon(), a.projects.content()),
+		container.NewTabItemWithIcon("Activity", theme.HistoryIcon(), a.activity.content()),
+		container.NewTabItemWithIcon("Settings", theme.SettingsIcon(), a.settings.content(a.frontierPanel)),
 	)
 	tabs.SetTabLocation(container.TabLocationTop)
 
-	root := container.NewBorder(statusBar, nil, nil, nil, tabs)
+	// Thin orange divider line under the status bar — same trick the ED
+	// in-game HUD uses to separate header from body.
+	divider := canvas.NewRectangle(edOrange)
+	divider.SetMinSize(fyne.NewSize(0, 1))
+
+	header := container.NewVBox(a.statusBar.content(), divider)
+	root := container.NewBorder(header, nil, nil, nil, tabs)
 	a.window.SetContent(root)
 
-	// Background goroutines: status bar polling, activity stream, periodic
-	// project list refresh, Frontier status polling. All redirect their UI
-	// mutations through fyne.Do (Fyne's main-thread dispatch since v2.6).
 	subCtx, cancel := context.WithCancel(ctx)
 	a.window.SetOnClosed(func() {
 		cancel()
@@ -108,17 +104,8 @@ func (a *App) runStatusBarLoop(ctx context.Context) {
 	t := time.NewTicker(2 * time.Second)
 	defer t.Stop()
 	update := func() {
-		sess := a.srv.Session()
-		snap := sess.Snapshot()
-		fyne.Do(func() {
-			a.cmdrLabel.SetText("Cmdr: " + dashIfEmpty(snap.Commander))
-			a.systemLabel.SetText("System: " + dashIfEmpty(snap.StarSystem))
-			if snap.Docked && snap.StationName != "" {
-				a.dockLabel.SetText("Dock: " + snap.StationName)
-			} else {
-				a.dockLabel.SetText("Dock: undocked")
-			}
-		})
+		snap := a.srv.Session().Snapshot()
+		fyne.Do(func() { a.statusBar.update(snap.Commander, snap.StarSystem, snap.Docked, snap.StationName) })
 	}
 	update()
 	for {
@@ -147,366 +134,91 @@ func (a *App) runActivityLoop(ctx context.Context) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Status bar
+// ---------------------------------------------------------------------------
+
+type statusBar struct {
+	version string
+
+	cmdrVal, systemVal, dockVal *canvas.Text
+	indicator                   *canvas.Circle
+	root                        fyne.CanvasObject
+}
+
+func newStatusBar(version string) *statusBar {
+	mkLabel := func(text string) *canvas.Text {
+		t := canvas.NewText(text, edFgMuted)
+		t.TextSize = 12
+		return t
+	}
+	mkValue := func() *canvas.Text {
+		t := canvas.NewText("—", edFg)
+		t.TextSize = 13
+		t.TextStyle = fyne.TextStyle{Bold: true}
+		return t
+	}
+	sb := &statusBar{
+		version:   version,
+		cmdrVal:   mkValue(),
+		systemVal: mkValue(),
+		dockVal:   mkValue(),
+		indicator: canvas.NewCircle(edFgDim),
+	}
+	sb.indicator.Resize(fyne.NewSize(10, 10))
+	sb.indicator.StrokeWidth = 0
+
+	field := func(label string, value *canvas.Text) fyne.CanvasObject {
+		return container.NewHBox(mkLabel(label), value)
+	}
+
+	indWrap := container.New(layout.NewCenterLayout(), container.NewWithoutLayout(sb.indicator))
+	indWrap.Resize(fyne.NewSize(16, 16))
+
+	verText := canvas.NewText("v"+version, edFgDim)
+	verText.TextSize = 11
+
+	left := container.NewHBox(
+		container.NewPadded(indWrap),
+		field("CMDR ", sb.cmdrVal),
+		widget.NewSeparator(),
+		field("SYSTEM ", sb.systemVal),
+		widget.NewSeparator(),
+		field("DOCK ", sb.dockVal),
+	)
+	right := container.NewHBox(verText)
+	sb.root = container.NewPadded(container.NewBorder(nil, nil, left, right, layout.NewSpacer()))
+	return sb
+}
+
+func (sb *statusBar) content() fyne.CanvasObject { return sb.root }
+
+func (sb *statusBar) update(cmdr, system string, docked bool, station string) {
+	sb.cmdrVal.Text = dashIfEmpty(cmdr)
+	sb.systemVal.Text = dashIfEmpty(system)
+	if docked && station != "" {
+		sb.dockVal.Text = station
+		sb.dockVal.Color = edStatusOK
+		sb.indicator.FillColor = edStatusOK
+	} else {
+		sb.dockVal.Text = "undocked"
+		sb.dockVal.Color = edFgMuted
+		sb.indicator.FillColor = edFgDim
+	}
+	if cmdr == "" {
+		sb.indicator.FillColor = edFgDim
+	} else if sb.indicator.FillColor != edStatusOK {
+		sb.indicator.FillColor = edStatusInfo
+	}
+	sb.cmdrVal.Refresh()
+	sb.systemVal.Refresh()
+	sb.dockVal.Refresh()
+	sb.indicator.Refresh()
+}
+
 func dashIfEmpty(s string) string {
 	if s == "" {
 		return "—"
 	}
 	return s
-}
-
-// ---- Projects panel --------------------------------------------------------
-
-type projectsPanel struct {
-	srv *web.Server
-
-	mu       sync.Mutex
-	rows     []ravencolonial.Project
-	commander string
-	err       string
-
-	summary  *widget.Label
-	list     *widget.List
-	refresh  *widget.Button
-}
-
-func newProjectsPanel(srv *web.Server) *projectsPanel {
-	p := &projectsPanel{srv: srv}
-	p.summary = widget.NewLabel("Loading…")
-	p.list = widget.NewList(
-		func() int {
-			p.mu.Lock()
-			defer p.mu.Unlock()
-			return len(p.rows)
-		},
-		func() fyne.CanvasObject {
-			return widget.NewLabel("template — long enough to size correctly")
-		},
-		func(idx widget.ListItemID, obj fyne.CanvasObject) {
-			p.mu.Lock()
-			pr := p.rows[idx]
-			p.mu.Unlock()
-			obj.(*widget.Label).SetText(formatProject(pr))
-		},
-	)
-	p.refresh = widget.NewButton("Refresh", func() { go p.refreshNow() })
-	return p
-}
-
-func (p *projectsPanel) content() fyne.CanvasObject {
-	top := container.NewBorder(nil, nil, nil, p.refresh, p.summary)
-	return container.NewBorder(top, nil, nil, nil, p.list)
-}
-
-func (p *projectsPanel) runAutoRefresh(ctx context.Context) {
-	p.refreshNow()
-	t := time.NewTicker(60 * time.Second)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			p.refreshNow()
-		}
-	}
-}
-
-func (p *projectsPanel) refreshNow() {
-	fyne.Do(func() { p.summary.SetText("Loading…") })
-	rows, cmdr, err := p.srv.ActiveProjects(context.Background())
-	p.mu.Lock()
-	p.rows = rows
-	p.commander = cmdr
-	if err != nil {
-		p.err = err.Error()
-	} else {
-		p.err = ""
-	}
-	count := len(rows)
-	p.mu.Unlock()
-
-	fyne.Do(func() {
-		switch {
-		case p.err != "":
-			p.summary.SetText("Refresh failed: " + p.err)
-		case p.commander == "":
-			p.summary.SetText("Commander unknown — start Elite Dangerous to populate.")
-		default:
-			p.summary.SetText(fmt.Sprintf("%d active project%s for Cmdr %s", count, plural(count), p.commander))
-		}
-		p.list.Refresh()
-	})
-}
-
-func formatProject(p ravencolonial.Project) string {
-	name := p.BuildName
-	if name == "" {
-		name = p.BuildID
-	}
-	sysName := p.SystemName
-	if sysName == "" {
-		sysName = "(unknown system)"
-	}
-	outstanding := 0
-	for _, n := range p.Commodities {
-		outstanding += n
-	}
-	status := "active"
-	if p.Complete {
-		status = "complete"
-	}
-	return fmt.Sprintf("%s — %s [%s] %d units outstanding", sysName, name, status, outstanding)
-}
-
-func plural(n int) string {
-	if n == 1 {
-		return ""
-	}
-	return "s"
-}
-
-// ---- Activity panel --------------------------------------------------------
-
-type activityPanel struct {
-	mu      sync.Mutex
-	entries []reporter.Status
-
-	list *widget.List
-}
-
-func newActivityPanel() *activityPanel {
-	p := &activityPanel{}
-	p.list = widget.NewList(
-		func() int {
-			p.mu.Lock()
-			defer p.mu.Unlock()
-			return len(p.entries)
-		},
-		func() fyne.CanvasObject {
-			lbl := widget.NewLabel("template line")
-			lbl.Wrapping = fyne.TextWrapWord
-			return lbl
-		},
-		func(idx widget.ListItemID, obj fyne.CanvasObject) {
-			p.mu.Lock()
-			s := p.entries[idx]
-			p.mu.Unlock()
-			obj.(*widget.Label).SetText(formatStatus(s))
-		},
-	)
-	return p
-}
-
-func (p *activityPanel) content() fyne.CanvasObject {
-	return p.list
-}
-
-func (p *activityPanel) append(s reporter.Status) {
-	p.mu.Lock()
-	p.entries = append(p.entries, s)
-	if len(p.entries) > 500 {
-		p.entries = p.entries[len(p.entries)-500:]
-	}
-	count := len(p.entries)
-	p.mu.Unlock()
-	fyne.Do(func() {
-		p.list.Refresh()
-		p.list.ScrollTo(count - 1)
-	})
-}
-
-func formatStatus(s reporter.Status) string {
-	return fmt.Sprintf("[%s] %s  %s", s.Time.Format("15:04:05"), s.Level, s.Message)
-}
-
-// ---- Settings panel --------------------------------------------------------
-
-type settingsPanel struct {
-	srv *web.Server
-
-	journalDir, apiBase, apiKey, cmdrOverride            *widget.Entry
-	edsmKey, inaraKey                                    *widget.Entry
-	replaySession, eddnEnabled, edsmEnabled, inaraEnabled *widget.Check
-	frontierCAPIEnabled                                  *widget.Check
-	notice                                               *widget.Label
-}
-
-func newSettingsPanel(srv *web.Server) *settingsPanel {
-	p := &settingsPanel{srv: srv}
-	cfg := srv.Config()
-
-	p.journalDir = widget.NewEntry()
-	p.journalDir.SetText(cfg.JournalDir)
-	p.journalDir.SetPlaceHolder("auto-detected if blank")
-
-	p.apiBase = widget.NewEntry()
-	p.apiBase.SetText(cfg.APIBaseURL)
-	p.apiBase.SetPlaceHolder(ravencolonial.DefaultBaseURL)
-
-	p.apiKey = widget.NewPasswordEntry()
-	p.apiKey.SetText(cfg.APIKey)
-	p.apiKey.SetPlaceHolder("optional; get from ravencolonial.com/user")
-
-	p.cmdrOverride = widget.NewEntry()
-	p.cmdrOverride.SetText(cfg.CommanderOverride)
-	p.cmdrOverride.SetPlaceHolder("leave blank to use the commander in the journal")
-
-	p.replaySession = widget.NewCheck("Replay current journal session on startup (backfill)", nil)
-	p.replaySession.SetChecked(cfg.ReplaySession)
-
-	p.eddnEnabled = widget.NewCheck("Upload to EDDN (anonymous community data — no key)", nil)
-	p.eddnEnabled.SetChecked(cfg.EDDNEnabled)
-
-	p.edsmEnabled = widget.NewCheck("Upload to EDSM (requires API key)", nil)
-	p.edsmEnabled.SetChecked(cfg.EDSMEnabled)
-	p.edsmKey = widget.NewPasswordEntry()
-	p.edsmKey.SetText(cfg.EDSMAPIKey)
-	p.edsmKey.SetPlaceHolder("from edsm.net/en/settings/api")
-
-	p.inaraEnabled = widget.NewCheck("Upload to Inara (requires API key)", nil)
-	p.inaraEnabled.SetChecked(cfg.InaraEnabled)
-	p.inaraKey = widget.NewPasswordEntry()
-	p.inaraKey.SetText(cfg.InaraAPIKey)
-	p.inaraKey.SetPlaceHolder("from inara.cz/settings-api/")
-
-	p.frontierCAPIEnabled = widget.NewCheck("Use cAPI for FC inventory ground-truth (sign in below)", nil)
-	p.frontierCAPIEnabled.SetChecked(cfg.FrontierCAPIEnabled)
-
-	p.notice = widget.NewLabel("")
-	p.notice.Wrapping = fyne.TextWrapWord
-
-	return p
-}
-
-func (p *settingsPanel) content(frontier *frontierPanel) fyne.CanvasObject {
-	form := widget.NewForm(
-		widget.NewFormItem("Journal directory", p.journalDir),
-		widget.NewFormItem("API base URL", p.apiBase),
-		widget.NewFormItem("rcc-key (ravencolonial)", p.apiKey),
-		widget.NewFormItem("Commander override", p.cmdrOverride),
-		widget.NewFormItem("Backfill", p.replaySession),
-		widget.NewFormItem("EDDN", p.eddnEnabled),
-		widget.NewFormItem("EDSM", p.edsmEnabled),
-		widget.NewFormItem("EDSM API key", p.edsmKey),
-		widget.NewFormItem("Inara", p.inaraEnabled),
-		widget.NewFormItem("Inara API key", p.inaraKey),
-		widget.NewFormItem("Frontier cAPI", p.frontierCAPIEnabled),
-	)
-	form.SubmitText = "Save"
-	form.OnSubmit = p.save
-
-	return container.NewVScroll(container.NewVBox(
-		form,
-		p.notice,
-		widget.NewSeparator(),
-		widget.NewLabelWithStyle("Frontier sign-in", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		frontier.content(),
-	))
-}
-
-func (p *settingsPanel) save() {
-	newCfg := config.Config{
-		JournalDir:          p.journalDir.Text,
-		APIBaseURL:          p.apiBase.Text,
-		APIKey:              p.apiKey.Text,
-		CommanderOverride:   p.cmdrOverride.Text,
-		ReplaySession:       p.replaySession.Checked,
-		EDDNEnabled:         p.eddnEnabled.Checked,
-		EDSMEnabled:         p.edsmEnabled.Checked,
-		EDSMAPIKey:          p.edsmKey.Text,
-		InaraEnabled:        p.inaraEnabled.Checked,
-		InaraAPIKey:         p.inaraKey.Text,
-		FrontierCAPIEnabled: p.frontierCAPIEnabled.Checked,
-	}
-	if err := p.srv.ApplyConfig(newCfg); err != nil {
-		fyne.Do(func() { p.notice.SetText("Save failed: " + err.Error()) })
-		return
-	}
-	fyne.Do(func() { p.notice.SetText("Saved. Some changes (journal dir) take effect on next startup.") })
-}
-
-// ---- Frontier sign-in panel ------------------------------------------------
-
-type frontierPanel struct {
-	srv *web.Server
-
-	status   *widget.Label
-	signin   *widget.Button
-	signout  *widget.Button
-}
-
-func newFrontierPanel(srv *web.Server) *frontierPanel {
-	p := &frontierPanel{srv: srv}
-	p.status = widget.NewLabel("…")
-	p.status.Wrapping = fyne.TextWrapWord
-	p.signin = widget.NewButton("Sign in with Frontier", func() { go p.doSignin() })
-	p.signout = widget.NewButton("Sign out", func() { go p.doSignout() })
-	p.signout.Hide()
-	return p
-}
-
-func (p *frontierPanel) content() fyne.CanvasObject {
-	return container.NewVBox(p.status, container.NewHBox(p.signin, p.signout))
-}
-
-func (p *frontierPanel) runStatusLoop(ctx context.Context) {
-	t := time.NewTicker(10 * time.Second)
-	defer t.Stop()
-	p.refresh()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			p.refresh()
-		}
-	}
-}
-
-func (p *frontierPanel) refresh() {
-	signed, expiresAt, expired := p.srv.FrontierStatus()
-	fyne.Do(func() {
-		if signed {
-			msg := "Signed in"
-			if !expiresAt.IsZero() {
-				msg += " — token expires " + expiresAt.Local().Format("15:04 02 Jan")
-			}
-			if expired {
-				msg += " (will refresh on next use)"
-			}
-			p.status.SetText(msg)
-			p.signin.Hide()
-			p.signout.Show()
-		} else {
-			p.status.SetText("Not signed in. Click Sign in to authorise with Frontier; a browser tab will open.")
-			p.signin.Show()
-			p.signout.Hide()
-		}
-	})
-}
-
-func (p *frontierPanel) doSignin() {
-	url, err := p.srv.FrontierStartSignin()
-	if err != nil {
-		fyne.Do(func() { p.status.SetText("Sign-in failed: " + err.Error()) })
-		return
-	}
-	// Open the auth URL in the user's default browser.
-	if err := web.OpenBrowser(url); err != nil {
-		fyne.Do(func() {
-			p.status.SetText("Could not open browser; copy this URL into your browser: " + url)
-		})
-		return
-	}
-	fyne.Do(func() {
-		p.status.SetText("Opened Frontier auth in your browser — finish there, then return here.")
-	})
-}
-
-func (p *frontierPanel) doSignout() {
-	if err := p.srv.FrontierSignout(); err != nil {
-		fyne.Do(func() { p.status.SetText("Sign-out failed: " + err.Error()) })
-		return
-	}
-	p.refresh()
 }
