@@ -152,6 +152,11 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		if newCfg.CommanderOverride != "" {
 			s.session.SetCommander(newCfg.CommanderOverride, "")
 		}
+		// If the user just turned cAPI sync ON, kick the poller so they
+		// don't wait the full 15 min for first data.
+		if newCfg.FrontierCAPIEnabled && !s.cfg.FrontierCAPIEnabled {
+			defer s.kickFrontierSync()
+		}
 		// Hot-update the EDDN destination too — enable/disable flag and
 		// journal dir can change without restart.
 		if s.eddn != nil {

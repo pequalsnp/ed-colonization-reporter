@@ -53,9 +53,10 @@ type Server struct {
 	inara   *inara.Uploader
 	mux     *destinations.Multiplex
 
-	frontierFlow *frontier.FlowManager
-	frontierCAPI *frontier.CAPI
-	frontierStore frontier.TokenStore
+	frontierFlow    *frontier.FlowManager
+	frontierCAPI    *frontier.CAPI
+	frontierStore   frontier.TokenStore
+	frontierTrigger chan struct{} // buffered(1): kick the cAPI poller
 
 	hub      *statusHub
 	listener net.Listener
@@ -67,7 +68,17 @@ type Server struct {
 
 // New creates a Server with the initial config.
 func New(cfg config.Config) *Server {
-	return &Server{cfg: cfg, hub: newStatusHub()}
+	return &Server{cfg: cfg, hub: newStatusHub(), frontierTrigger: make(chan struct{}, 1)}
+}
+
+// kickFrontierSync requests an immediate cAPI poll on the next tick of
+// the sync goroutine. Non-blocking: if the trigger is already pending,
+// the second kick is dropped.
+func (s *Server) kickFrontierSync() {
+	select {
+	case s.frontierTrigger <- struct{}{}:
+	default:
+	}
 }
 
 // URL returns the http URL the server is listening on. Empty until Start.
@@ -116,6 +127,8 @@ func (s *Server) Start(ctx context.Context) error {
 	// Spin up the Inara batch flusher. Runs even when Inara is disabled;
 	// Flush() is a no-op without an API key.
 	s.inara.StartBackground(tailerCtx, 0)
+	// Background poller for the Frontier cAPI /fleetcarrier endpoint.
+	go s.runFrontierCAPISync(tailerCtx)
 
 	if s.OpenBrowser != nil {
 		s.OpenBrowser(s.URL())
@@ -196,6 +209,9 @@ func (s *Server) initSessionAndReporter() error {
 			Time: time.Now(), Level: reporter.LevelOK,
 			Message: "Signed in with Frontier (cAPI tokens cached)",
 		})
+		// Trigger an immediate FC sync — the user just signed in and is
+		// presumably eager to see ravencolonial reflect their FC state.
+		s.kickFrontierSync()
 	}
 
 	s.mux = destinations.NewMultiplex(s.rep, s.eddn, s.edsm, s.inara)
