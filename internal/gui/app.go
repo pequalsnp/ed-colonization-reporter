@@ -16,6 +16,7 @@ import (
 	fyneapp "fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
@@ -99,6 +100,9 @@ func (a *App) show(ctx context.Context) {
 	tabs.OnSelected = func(_ *container.TabItem) {
 		prefs.SetInt("window.activeTab", tabs.SelectedIndex())
 	}
+
+	// Keyboard shortcuts — standard desktop conventions.
+	a.registerShortcuts(tabs)
 
 	// Thin orange divider line under the status bar — same trick the ED
 	// in-game HUD uses to separate header from body.
@@ -257,4 +261,29 @@ func dashIfEmpty(s string) string {
 		return "—"
 	}
 	return s
+}
+
+// registerShortcuts wires standard desktop keyboard shortcuts. Fyne's
+// Canvas.AddShortcut handles the cross-platform Ctrl/Cmd modifier
+// mapping (Cmd on macOS, Ctrl elsewhere) via KeyModifierShortcutDefault.
+func (a *App) registerShortcuts(tabs *container.AppTabs) {
+	mod := fyne.KeyModifierShortcutDefault
+	canvas := a.window.Canvas()
+
+	bind := func(key fyne.KeyName, action func()) {
+		canvas.AddShortcut(&desktop.CustomShortcut{KeyName: key, Modifier: mod}, func(fyne.Shortcut) {
+			action()
+		})
+	}
+
+	bind(fyne.KeyR, func() { a.projects.refreshNow() })
+	bind(fyne.Key1, func() { tabs.SelectIndex(0) })
+	bind(fyne.Key2, func() { tabs.SelectIndex(1) })
+	bind(fyne.Key3, func() { tabs.SelectIndex(2) })
+	bind(fyne.KeyQ, func() { a.window.Close() })
+
+	// F5 (no modifier) as a refresh alias — matches browser muscle memory.
+	canvas.AddShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyF5}, func(fyne.Shortcut) {
+		a.projects.refreshNow()
+	})
 }
