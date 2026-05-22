@@ -125,6 +125,9 @@ func newActivityPanel() *activityPanel {
 		visCount := len(p.visible)
 		totalCount := len(p.entries)
 		p.mu.Unlock()
+		if p.prefs != nil {
+			p.prefs.SetString("activity.search", text)
+		}
 		fyne.Do(func() {
 			p.countLbl.Text = fmt.Sprintf("%d / %d entries", visCount, totalCount)
 			p.countLbl.Refresh()
@@ -309,8 +312,8 @@ func (p *activityPanel) applyChipStyles() {
 }
 
 // AttachPrefs wires Fyne preferences for the activity panel's filter
-// state. The current per-level toggles are restored from prefs and
-// future toggles are written back.
+// state. The current per-level toggles + search text are restored
+// from prefs and future toggles are written back.
 func (p *activityPanel) AttachPrefs(prefs fyne.Preferences) {
 	p.prefs = prefs
 	p.mu.Lock()
@@ -318,10 +321,17 @@ func (p *activityPanel) AttachPrefs(prefs fyne.Preferences) {
 		// Default true (chip on) so first launch shows everything.
 		p.levelEnabled[lvl] = prefs.BoolWithFallback(prefKeyForLevel(lvl), true)
 	}
+	searchText := prefs.StringWithFallback("activity.search", "")
+	if searchText != "" {
+		p.search = strings.ToLower(strings.TrimSpace(searchText))
+	}
 	p.recomputeVisibleLocked()
 	p.mu.Unlock()
-	// Reflect restored state in the chip visuals.
+	// Reflect restored state in the chip visuals + the search entry.
 	p.applyChipStyles()
+	if searchText != "" {
+		fyne.Do(func() { p.searchBox.SetText(searchText) })
+	}
 }
 
 func prefKeyForLevel(l reporter.Level) string {

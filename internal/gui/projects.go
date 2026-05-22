@@ -67,6 +67,9 @@ func newProjectsPanel(srv *web.Server) *projectsPanel {
 		p.mu.Lock()
 		p.filter = strings.TrimSpace(strings.ToLower(text))
 		p.mu.Unlock()
+		if p.prefs != nil {
+			p.prefs.SetString("projects.filter", text)
+		}
 		p.rerender()
 	}
 
@@ -114,7 +117,7 @@ func (p *projectsPanel) content() fyne.CanvasObject {
 }
 
 // AttachPrefs is called by the App once it has access to fyne.Preferences,
-// so the panel can restore its persisted sort choice.
+// so the panel can restore its persisted sort + filter state.
 func (p *projectsPanel) AttachPrefs(prefs fyne.Preferences) {
 	p.prefs = prefs
 	if saved := prefs.StringWithFallback("projects.sort", sortOutstandingDesc); saved != "" {
@@ -122,6 +125,12 @@ func (p *projectsPanel) AttachPrefs(prefs fyne.Preferences) {
 		p.sortKey = saved
 		p.mu.Unlock()
 		p.sortSel.SetSelected(sortLabelForKey(saved))
+	}
+	if savedFilter := prefs.StringWithFallback("projects.filter", ""); savedFilter != "" {
+		p.mu.Lock()
+		p.filter = strings.TrimSpace(strings.ToLower(savedFilter))
+		p.mu.Unlock()
+		fyne.Do(func() { p.search.SetText(savedFilter) })
 	}
 }
 
