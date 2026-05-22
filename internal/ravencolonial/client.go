@@ -167,6 +167,25 @@ func (c *Client) OverwriteCarrierCargo(ctx context.Context, marketID int64, carg
 	return c.do(ctx, http.MethodPost, path, cargo, nil)
 }
 
+// PatchCarrierCargo applies a delta to the FC's stored cargo. Positive
+// values add, negative values remove. Used when the player transfers
+// cargo to/from the carrier mid-session — there is no full inventory
+// snapshot available outside of the commodities-market UI, so we
+// maintain server-side state by accumulating deltas.
+func (c *Client) PatchCarrierCargo(ctx context.Context, marketID int64, delta Cargo) error {
+	if marketID == 0 {
+		return errors.New("PatchCarrierCargo: marketID required")
+	}
+	if c.apiKey == "" {
+		return ErrNoAPIKey
+	}
+	if len(delta) == 0 {
+		return nil
+	}
+	path := fmt.Sprintf("/api/fc/%d/cargo", marketID)
+	return c.do(ctx, http.MethodPatch, path, delta, nil)
+}
+
 // ErrNoAPIKey is returned by FC-write methods when no rcc-key is configured.
 // Callers can match on this to silently skip Fleet Carrier sync rather than
 // surfacing a server-side 401 to the user.

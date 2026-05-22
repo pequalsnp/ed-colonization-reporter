@@ -231,6 +231,129 @@ func TestHandleCarrierJump_PreservesOwnedRecord(t *testing.T) {
 	}
 }
 
+func TestHandleCargoTransfer_PatchesDeltaForOwnedFC(t *testing.T) {
+	sess := state.New()
+	sess.SetCommander("Jameson", "F1")
+	sess.RegisterOwnedCarrier(state.OwnedCarrier{MarketID: 3700000123, Name: "MY-FC", Callsign: "ABC-12X"})
+	sess.SetDocked("MY-FC ABC-12X", 3700000123, 100)
+
+	api := &fakeAPI{}
+	r := New(api, sess)
+	raw := mustRaw(t, journal.EventCargoTransfer, map[string]any{
+		"Transfers": []map[string]any{
+			{"Type": "cmmcomposite", "Type_Localised": "CMM Composite", "Count": 2464, "Direction": "tocarrier"},
+			{"Type": "titanium", "Type_Localised": "Titanium", "Count": 100, "Direction": "toship"},
+			{"Type": "limpet", "Count": 8, "Direction": "tosrv"}, // must be ignored
+		},
+	})
+	if err := r.HandleEvent(context.Background(), raw); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if len(api.fcCargoPatches) != 1 {
+		t.Fatalf("fcCargoPatches = %d, want 1", len(api.fcCargoPatches))
+	}
+	patch := api.fcCargoPatches[0]
+	if patch.MarketID != 3700000123 {
+		t.Errorf("MarketID = %d", patch.MarketID)
+	}
+	if patch.Cargo["cmmcomposite"] != 2464 {
+		t.Errorf("cmmcomposite delta = %d, want +2464", patch.Cargo["cmmcomposite"])
+	}
+	if patch.Cargo["titanium"] != -100 {
+		t.Errorf("titanium delta = %d, want -100", patch.Cargo["titanium"])
+	}
+	if _, ok := patch.Cargo["limpet"]; ok {
+		t.Error("tosrv direction must not produce an FC delta")
+	}
+}
+
+func TestHandleCargoTransfer_SkipsWhenNotAtOwnedFC(t *testing.T) {
+	sess := state.New()
+	sess.SetCommander("Jameson", "F1")
+	// Docked at a station that is NOT our FC.
+	sess.SetDocked("Abraham Lincoln", 128666761, 100)
+
+	api := &fakeAPI{}
+	r := New(api, sess)
+	raw := mustRaw(t, journal.EventCargoTransfer, map[string]any{
+		"Transfers": []map[string]any{{"Type": "titanium", "Count": 100, "Direction": "toship"}},
+	})
+	if err := r.HandleEvent(context.Background(), raw); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if len(api.fcCargoPatches) != 0 {
+		t.Errorf("transfer outside of owned FC must not PATCH; got %v", api.fcCargoPatches)
+	}
+}
+
+func TestHandleCargoTransfer_SkipsWhenUndocked(t *testing.T) {
+	sess := state.New()
+	sess.SetCommander("Jameson", "F1")
+	sess.RegisterOwnedCarrier(state.OwnedCarrier{MarketID: 42, Name: "X", Callsign: "Y"})
+	// undocked
+
+	api := &fakeAPI{}
+	r := New(api, sess)
+	raw := mustRaw(t, journal.EventCargoTransfer, map[string]any{
+		"Transfers": []map[string]any{{"Type": "titanium", "Count": 5, "Direction": "tocarrier"}},
+	})
+	if err := r.HandleEvent(context.Background(), raw); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if len(api.fcCargoPatches) != 0 {
+		t.Errorf("transfer while undocked must not PATCH; got %v", api.fcCargoPatches)
+	}
+}
+
+func TestHandleCargoTransfer_AggregatesMultipleRowsSameCommodity(t *testing.T) {
+	sess := state.New()
+	sess.SetCommander("Jameson", "F1")
+	sess.RegisterOwnedCarrier(state.OwnedCarrier{MarketID: 42, Name: "X", Callsign: "Y"})
+	sess.SetDocked("X Y", 42, 100)
+
+	api := &fakeAPI{}
+	r := New(api, sess)
+	raw := mustRaw(t, journal.EventCargoTransfer, map[string]any{
+		"Transfers": []map[string]any{
+			{"Type": "titanium", "Count": 50, "Direction": "tocarrier"},
+			{"Type": "titanium", "Count": 30, "Direction": "tocarrier"},
+		},
+	})
+	if err := r.HandleEvent(context.Background(), raw); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if len(api.fcCargoPatches) != 1 {
+		t.Fatalf("got %d patches", len(api.fcCargoPatches))
+	}
+	if api.fcCargoPatches[0].Cargo["titanium"] != 80 {
+		t.Errorf("titanium delta = %d, want 80", api.fcCargoPatches[0].Cargo["titanium"])
+	}
+}
+
+func TestHandleCargoTransfer_SilentWhenNoAPIKey(t *testing.T) {
+	sess := state.New()
+	sess.SetCommander("Jameson", "F1")
+	sess.RegisterOwnedCarrier(state.OwnedCarrier{MarketID: 42, Name: "X", Callsign: "Y"})
+	sess.SetDocked("X", 42, 100)
+	api := &fakeAPI{fcCargoErr: ravencolonial.ErrNoAPIKey}
+	r := New(api, sess)
+	errs := 0
+	r.OnStatus(func(s Status) {
+		if s.Level == LevelError {
+			errs++
+		}
+	})
+	raw := mustRaw(t, journal.EventCargoTransfer, map[string]any{
+		"Transfers": []map[string]any{{"Type": "titanium", "Count": 5, "Direction": "tocarrier"}},
+	})
+	if err := r.HandleEvent(context.Background(), raw); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if errs != 0 {
+		t.Errorf("missing API key should not surface ERROR status; got %d", errs)
+	}
+}
+
 func TestHandleCarrierJump_DoesNotClaimOwnershipOfOtherFC(t *testing.T) {
 	sess := state.New()
 	r := New(&fakeAPI{}, sess)
@@ -251,17 +374,18 @@ func TestHandleCarrierJump_DoesNotClaimOwnershipOfOtherFC(t *testing.T) {
 // fakeAPI is a minimal stub of the ravencolonial APIClient used to assert
 // what the reporter calls.
 type fakeAPI struct {
-	lookups       []lookupCall
-	updates       []ravencolonial.ProjectUpdate
-	completes     []string
-	contributions []contributionCall
-	fcPuts        []ravencolonial.FleetCarrier
-	fcCargo       []fcCargoCall
-	lookupResp    map[lookupKey]*ravencolonial.Project
-	lookupErr     map[lookupKey]error
-	updateErr     error
-	fcPutErr      error
-	fcCargoErr    error
+	lookups        []lookupCall
+	updates        []ravencolonial.ProjectUpdate
+	completes      []string
+	contributions  []contributionCall
+	fcPuts         []ravencolonial.FleetCarrier
+	fcCargo        []fcCargoCall
+	fcCargoPatches []fcCargoCall
+	lookupResp     map[lookupKey]*ravencolonial.Project
+	lookupErr      map[lookupKey]error
+	updateErr      error
+	fcPutErr       error
+	fcCargoErr     error
 }
 
 type fcCargoCall struct {
@@ -318,6 +442,11 @@ func (f *fakeAPI) PutFleetCarrier(_ context.Context, fc ravencolonial.FleetCarri
 
 func (f *fakeAPI) OverwriteCarrierCargo(_ context.Context, marketID int64, c ravencolonial.Cargo) error {
 	f.fcCargo = append(f.fcCargo, fcCargoCall{MarketID: marketID, Cargo: c})
+	return f.fcCargoErr
+}
+
+func (f *fakeAPI) PatchCarrierCargo(_ context.Context, marketID int64, c ravencolonial.Cargo) error {
+	f.fcCargoPatches = append(f.fcCargoPatches, fcCargoCall{MarketID: marketID, Cargo: c})
 	return f.fcCargoErr
 }
 

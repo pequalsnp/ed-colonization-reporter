@@ -27,6 +27,7 @@ type APIClient interface {
 	Contribute(ctx context.Context, buildID, cmdr string, contrib ravencolonial.Contribution) error
 	PutFleetCarrier(ctx context.Context, fc ravencolonial.FleetCarrier) error
 	OverwriteCarrierCargo(ctx context.Context, marketID int64, cargo ravencolonial.Cargo) error
+	PatchCarrierCargo(ctx context.Context, marketID int64, delta ravencolonial.Cargo) error
 }
 
 // Status is a user-visible status update emitted by the reporter.
@@ -205,7 +206,57 @@ func (r *Reporter) HandleEvent(ctx context.Context, raw journal.Raw) error {
 			return fmt.Errorf("market: %w", err)
 		}
 		return r.handleMarket(ctx, e)
+	case journal.EventCargoTransfer:
+		var e journal.CargoTransferEvent
+		if err := json.Unmarshal(raw.Payload, &e); err != nil {
+			return fmt.Errorf("cargotransfer: %w", err)
+		}
+		return r.handleCargoTransfer(ctx, e)
 	}
+	return nil
+}
+
+// handleCargoTransfer turns a journal cargo transfer (ship↔FC) into a
+// delta PATCH to ravencolonial. The journal does not say which carrier
+// the player is at, so we infer from the current dock — and only PATCH
+// when that's one of the commander's own FCs.
+func (r *Reporter) handleCargoTransfer(ctx context.Context, e journal.CargoTransferEvent) error {
+	_, _, marketID := r.Session.Dock()
+	if marketID == 0 || !r.Session.IsOwnedCarrier(marketID) {
+		return nil // not at our FC; transfers between ship/SRV don't affect FC state
+	}
+	delta := ravencolonial.Cargo{}
+	for _, t := range e.Transfers {
+		if t.Count <= 0 {
+			continue
+		}
+		key := NormalizeCommodity(t.Type)
+		if key == "" {
+			key = NormalizeCommodity(t.TypeLocalised)
+		}
+		if key == "" {
+			continue
+		}
+		switch t.Direction {
+		case journal.TransferToCarrier:
+			delta[key] += t.Count
+		case journal.TransferToShip:
+			delta[key] -= t.Count
+		default:
+			// tosrv or future directions — not an FC delta.
+		}
+	}
+	if len(delta) == 0 {
+		return nil
+	}
+	if err := r.API.PatchCarrierCargo(ctx, marketID, delta); err != nil {
+		if errors.Is(err, ravencolonial.ErrNoAPIKey) {
+			return nil
+		}
+		r.emit(LevelError, "FC cargo delta failed: %v", err)
+		return err
+	}
+	r.emit(LevelOK, "FC cargo delta posted (%d commodity changes)", len(delta))
 	return nil
 }
 

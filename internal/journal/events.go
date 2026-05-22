@@ -21,6 +21,7 @@ const (
 	EventDocked                        = "Docked"
 	EventUndocked                      = "Undocked"
 	EventMarket                        = "Market"
+	EventCargoTransfer                 = "CargoTransfer"
 	EventColonisationConstructionDepot = "ColonisationConstructionDepot"
 	EventColonisationContribution      = "ColonisationContribution"
 )
@@ -203,6 +204,31 @@ type MarketEvent struct {
 	StationName string `json:"StationName"`
 	StationType string `json:"StationType"`
 	StarSystem  string `json:"StarSystem"`
+}
+
+// CargoTransferDirection labels each row in a CargoTransfer event. Values
+// are documented as lowercase strings in the journal manual.
+const (
+	TransferToCarrier = "tocarrier"
+	TransferToShip    = "toship"
+	TransferToSRV     = "tosrv"
+)
+
+// CargoTransferItem is one row of a CargoTransfer event.
+type CargoTransferItem struct {
+	Type          string `json:"Type"`           // short symbol, e.g. "cmmcomposite"
+	TypeLocalised string `json:"Type_Localised"` // "CMM Composite"
+	Count         int    `json:"Count"`
+	Direction     string `json:"Direction"`      // "tocarrier" | "toship" | "tosrv"
+	MissionID     int64  `json:"MissionID,omitempty"`
+}
+
+// CargoTransferEvent fires when the player moves cargo between the ship,
+// an FC, or an SRV. The event has no MarketID; the caller infers the FC
+// from the player's current dock state.
+type CargoTransferEvent struct {
+	Envelope
+	Transfers []CargoTransferItem `json:"Transfers"`
 }
 
 // trimUTF8BOM strips a leading UTF-8 BOM (EF BB BF) if present. Frontier
