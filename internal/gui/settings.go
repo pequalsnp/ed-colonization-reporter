@@ -2,6 +2,10 @@ package gui
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -11,6 +15,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/pequalsnp/ed-colonization-reporter/internal/config"
+	"github.com/pequalsnp/ed-colonization-reporter/internal/journal"
 	"github.com/pequalsnp/ed-colonization-reporter/internal/ravencolonial"
 	"github.com/pequalsnp/ed-colonization-reporter/internal/web"
 )
@@ -20,12 +25,16 @@ import (
 type settingsPanel struct {
 	srv *web.Server
 
-	journalDir, apiBase, apiKey, cmdrOverride               *widget.Entry
-	edsmKey, inaraKey                                       *widget.Entry
-	replaySession, eddnEnabled, edsmEnabled, inaraEnabled   *widget.Check
-	frontierCAPIEnabled                                     *widget.Check
-	save                                                    *widget.Button
-	notice                                                  *canvas.Text
+	journalDir, apiBase, apiKey, cmdrOverride             *widget.Entry
+	edsmKey, inaraKey                                     *widget.Entry
+	replaySession, eddnEnabled, edsmEnabled, inaraEnabled *widget.Check
+	frontierCAPIEnabled                                   *widget.Check
+	save                                                  *widget.Button
+	notice                                                *canvas.Text
+
+	// journalStatus shows whether the configured (or auto-detected)
+	// journal directory contains any Journal.*.log files.
+	journalStatus *canvas.Text
 }
 
 func newSettingsPanel(srv *web.Server) *settingsPanel {
@@ -33,6 +42,10 @@ func newSettingsPanel(srv *web.Server) *settingsPanel {
 	cfg := srv.Config()
 
 	p.journalDir = entry(cfg.JournalDir, "auto-detected if blank")
+	p.journalStatus = canvas.NewText("", edFgMuted)
+	p.journalStatus.TextSize = 11
+	p.journalDir.OnChanged = func(string) { p.updateJournalStatus() }
+
 	p.apiBase = entry(cfg.APIBaseURL, ravencolonial.DefaultBaseURL)
 	p.apiKey = passwordEntry(cfg.APIKey, "optional — from ravencolonial.com/user")
 	p.cmdrOverride = entry(cfg.CommanderOverride, "leave blank to use the journal commander")
@@ -57,7 +70,72 @@ func newSettingsPanel(srv *web.Server) *settingsPanel {
 	p.notice = canvas.NewText("", edFgMuted)
 	p.notice.TextSize = 12
 
+	// Seed the journal-status indicator with the initial state.
+	p.updateJournalStatus()
+
 	return p
+}
+
+// updateJournalStatus inspects the configured (or auto-detected) journal
+// directory and rewrites the status indicator. Called on every keystroke
+// in the journal_dir entry plus once at construction.
+func (p *settingsPanel) updateJournalStatus() {
+	dir := strings.TrimSpace(p.journalDir.Text)
+	autoDetected := false
+	if dir == "" {
+		if d, err := journal.FindJournalDir(); err == nil {
+			dir = d
+			autoDetected = true
+		}
+	}
+	var (
+		txt   string
+		color = edFgMuted
+	)
+	switch {
+	case dir == "":
+		txt = "✗ no directory configured or auto-detected"
+		color = edStatusError
+	default:
+		info, err := os.Stat(dir)
+		switch {
+		case os.IsNotExist(err):
+			txt = "✗ path does not exist"
+			color = edStatusError
+		case err != nil:
+			txt = "✗ cannot read: " + err.Error()
+			color = edStatusError
+		case !info.IsDir():
+			txt = "✗ path is not a directory"
+			color = edStatusError
+		default:
+			n := countJournalFiles(dir)
+			if n == 0 {
+				txt = fmt.Sprintf("✗ directory exists but contains no Journal.*.log files (%s)", dir)
+				color = edStatusWarn
+			} else {
+				prefix := "✓"
+				if autoDetected {
+					prefix = "✓ auto-detected"
+				}
+				txt = fmt.Sprintf("%s — %d journal file%s found", prefix, n, plural(n))
+				color = edStatusOK
+			}
+		}
+	}
+	fyne.Do(func() {
+		p.journalStatus.Text = txt
+		p.journalStatus.Color = color
+		p.journalStatus.Refresh()
+	})
+}
+
+func countJournalFiles(dir string) int {
+	files, err := filepath.Glob(filepath.Join(dir, "Journal.*.log"))
+	if err != nil {
+		return 0
+	}
+	return len(files)
 }
 
 func entry(initial, placeholder string) *widget.Entry {
@@ -78,6 +156,7 @@ func (p *settingsPanel) content(frontier *frontierPanel) fyne.CanvasObject {
 	localCard := section("Local",
 		"Where your journal lives and how the app behaves at startup.",
 		formItem("Journal directory", p.journalDir),
+		container.NewPadded(p.journalStatus),
 		formItem("Commander override", p.cmdrOverride),
 		checkboxRow(p.replaySession),
 	)
