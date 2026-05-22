@@ -11,6 +11,7 @@ import (
 	"context"
 	"image/color"
 	"net/url"
+	"strings"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -23,6 +24,7 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
+	"github.com/pequalsnp/ed-colonization-reporter/internal/reporter"
 	"github.com/pequalsnp/ed-colonization-reporter/internal/web"
 )
 
@@ -175,8 +177,28 @@ func (a *App) runActivityLoop(ctx context.Context) {
 				return
 			}
 			a.activity.append(s)
+			a.maybeNotify(s)
 		}
 	}
+}
+
+// maybeNotify decides whether a reporter.Status warrants a system
+// notification. We keep this list tight — every event already shows up
+// in the Activity tab, so we only ping the OS when something deserves
+// the user's attention even if the window is minimised.
+func (a *App) maybeNotify(s reporter.Status) {
+	switch {
+	case s.Level == reporter.LevelOK && strings.HasPrefix(s.Message, "Marked build "):
+		a.notify("Build complete", s.Message)
+	case s.Level == reporter.LevelOK && s.Message == "Signed in with Frontier (cAPI tokens cached)":
+		a.notify("Frontier sign-in", "Signed in successfully.")
+	case s.Level == reporter.LevelError && strings.HasPrefix(s.Message, "Tailer exited:"):
+		a.notify("Journal tail stopped", s.Message)
+	}
+}
+
+func (a *App) notify(title, body string) {
+	a.app.SendNotification(&fyne.Notification{Title: title, Content: body})
 }
 
 // ---------------------------------------------------------------------------
