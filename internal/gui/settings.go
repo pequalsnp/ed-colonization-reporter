@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -37,6 +38,8 @@ type settingsPanel struct {
 	replaySession, eddnEnabled, edsmEnabled, inaraEnabled *widget.Check
 	frontierCAPIEnabled                                   *widget.Check
 	startMinimized                                        *widget.Check
+
+	pollSeconds *widget.Entry
 	save                                                  *widget.Button
 	notice                                                *canvas.Text
 
@@ -77,6 +80,14 @@ func newSettingsPanel(srv *web.Server) *settingsPanel {
 
 	p.startMinimized = widget.NewCheck("Start minimized to system tray", nil)
 	p.startMinimized.SetChecked(cfg.StartMinimized)
+
+	pollDefault := cfg.ProjectsPollSeconds
+	if pollDefault == 0 {
+		pollDefault = 60
+	}
+	p.pollSeconds = widget.NewEntry()
+	p.pollSeconds.SetText(fmt.Sprintf("%d", pollDefault))
+	p.pollSeconds.SetPlaceHolder("60")
 
 	p.eddnEnabled = widget.NewCheck("Enable", nil)
 	p.eddnEnabled.SetChecked(cfg.EDDNEnabled)
@@ -461,6 +472,7 @@ func (p *settingsPanel) content(frontier *frontierPanel) fyne.CanvasObject {
 		formItem("API base URL", p.apiBase),
 		container.NewBorder(nil, nil, nil, p.rcTestBtn, p.rcTestStatus),
 		formItem("rcc-key", passwordRow(p.apiKey)),
+		formItem("Projects refresh (s)", p.pollSeconds),
 	)
 
 	eddnRow := checkboxRow(p.eddnEnabled)
@@ -495,6 +507,7 @@ func (p *settingsPanel) content(frontier *frontierPanel) fyne.CanvasObject {
 }
 
 func (p *settingsPanel) doSave() {
+	pollSec, _ := strconv.Atoi(strings.TrimSpace(p.pollSeconds.Text))
 	newCfg := config.Config{
 		JournalDir:          p.journalDir.Text,
 		APIBaseURL:          p.apiBase.Text,
@@ -502,6 +515,7 @@ func (p *settingsPanel) doSave() {
 		CommanderOverride:   p.cmdrOverride.Text,
 		ReplaySession:       p.replaySession.Checked,
 		StartMinimized:      p.startMinimized.Checked,
+		ProjectsPollSeconds: pollSec,
 		EDDNEnabled:         p.eddnEnabled.Checked,
 		EDSMEnabled:         p.edsmEnabled.Checked,
 		EDSMAPIKey:          p.edsmKey.Text,

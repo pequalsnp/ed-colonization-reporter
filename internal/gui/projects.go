@@ -127,16 +127,42 @@ func (p *projectsPanel) AttachPrefs(prefs fyne.Preferences) {
 
 func (p *projectsPanel) runAutoRefresh(ctx context.Context) {
 	p.refreshNow()
-	t := time.NewTicker(60 * time.Second)
+	interval := projectsPollInterval(p.srv.Config().ProjectsPollSeconds)
+	t := time.NewTicker(interval)
 	defer t.Stop()
+	// Reconfigure ticker periodically in case the user changed the
+	// setting at runtime via Save.
+	reconfig := time.NewTicker(30 * time.Second)
+	defer reconfig.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
 			p.refreshNow()
+		case <-reconfig.C:
+			want := projectsPollInterval(p.srv.Config().ProjectsPollSeconds)
+			if want != interval {
+				t.Reset(want)
+				interval = want
+			}
 		}
 	}
+}
+
+// projectsPollInterval clamps the configured value into a sensible range
+// and applies the default when 0.
+func projectsPollInterval(seconds int) time.Duration {
+	if seconds <= 0 {
+		seconds = 60
+	}
+	if seconds < 15 {
+		seconds = 15
+	}
+	if seconds > 600 {
+		seconds = 600
+	}
+	return time.Duration(seconds) * time.Second
 }
 
 func (p *projectsPanel) refreshNow() {

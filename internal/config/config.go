@@ -41,6 +41,12 @@ type Config struct {
 	// after a restart mid-session so we re-report depot states the game
 	// has already logged. Defaults to false.
 	ReplaySession bool `toml:"replay_session"`
+	// ProjectsPollSeconds is how often the GUI refreshes the active
+	// project list from ravencolonial. Range [15, 600]; 0 means use
+	// the default of 60s. Faster polling chews more network and
+	// hammers the upstream; slower means the UI lags behind website
+	// edits longer.
+	ProjectsPollSeconds int `toml:"projects_poll_seconds"`
 	// StartMinimized hides the main window on launch. The app still
 	// runs in the system tray; click the tray icon to surface it.
 	// Useful when the app is in autostart and you don't want it to
