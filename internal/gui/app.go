@@ -111,6 +111,32 @@ func (a *App) show(ctx context.Context) {
 	// Menubar — gives the app a real Quit / About / Shortcuts entry point.
 	a.window.SetMainMenu(a.buildMenu(tabs))
 
+	// System tray (KDE app indicator / GNOME tray / Win32 systray) —
+	// keep the app reachable from the system tray after the user
+	// closes the window. Available only on desktop drivers; the cast
+	// is the documented Fyne way to feature-detect.
+	if desk, ok := a.app.(desktop.App); ok {
+		trayMenu := fyne.NewMenu("ED Colonization Reporter",
+			fyne.NewMenuItem("Show", func() {
+				a.window.Show()
+				a.window.RequestFocus()
+			}),
+			fyne.NewMenuItemSeparator(),
+			fyne.NewMenuItem("Refresh projects", func() { a.projects.refreshNow() }),
+			fyne.NewMenuItemSeparator(),
+			fyne.NewMenuItem("Quit", func() { a.app.Quit() }),
+		)
+		desk.SetSystemTrayMenu(trayMenu)
+		desk.SetSystemTrayIcon(appIcon())
+	}
+
+	// Close-to-tray: closing the window hides it rather than quitting,
+	// matching common KDE/EDMC behaviour. Use Ctrl+Q or the tray menu
+	// to actually exit.
+	a.window.SetCloseIntercept(func() {
+		a.window.Hide()
+	})
+
 	// Thin orange divider line under the status bar — same trick the ED
 	// in-game HUD uses to separate header from body.
 	topDivider := canvas.NewRectangle(edOrange)
@@ -124,18 +150,16 @@ func (a *App) show(ctx context.Context) {
 	a.window.SetContent(root)
 
 	subCtx, cancel := context.WithCancel(ctx)
-	a.window.SetOnClosed(func() {
-		// Persist the window size for next launch. Fyne doesn't expose
-		// the window's screen position cross-platform (X11/Wayland/Win
-		// behave differently and not all WMs allow setting it), so we
-		// only round-trip the size.
+	// Persist size + tear down backend on actual quit. SetOnClosed fires
+	// when the window goes away for good (via Ctrl+Q / tray Quit / OS
+	// signal), not on the soft close-to-tray hide above.
+	a.app.Lifecycle().SetOnStopped(func() {
 		if c := a.window.Canvas(); c != nil {
 			sz := c.Size()
 			prefs.SetFloat("window.width", float64(sz.Width))
 			prefs.SetFloat("window.height", float64(sz.Height))
 		}
 		cancel()
-		a.app.Quit()
 	})
 
 	go a.runStatusBarLoop(subCtx)
