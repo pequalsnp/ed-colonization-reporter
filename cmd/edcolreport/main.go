@@ -56,6 +56,7 @@ func main() {
 	srv := web.New(cfg)
 	srv.Version = version
 	srv.Bind = *bind
+	srv.SetFirstRun(!existed)
 	// OpenBrowser is now a no-op for the desktop UI — the Fyne window is
 	// the primary surface, and the browser only gets opened when the
 	// Frontier sign-in button is clicked. We still call it once when the

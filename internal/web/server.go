@@ -66,6 +66,9 @@ type Server struct {
 
 	// startedAt is when New() ran; used for the About dialog uptime.
 	startedAt time.Time
+	// firstRun is set by main.go when config.Load reported no existing
+	// file. The GUI uses it to decide whether to show a welcome dialog.
+	firstRun bool
 
 	hub      *statusHub
 	listener net.Listener
@@ -75,7 +78,9 @@ type Server struct {
 	tailerCancel context.CancelFunc
 }
 
-// New creates a Server with the initial config.
+// New creates a Server with the initial config. firstRun indicates
+// whether the user has never run the app before (no config file existed
+// on disk), so the GUI can decide whether to show a welcome dialog.
 func New(cfg config.Config) *Server {
 	return &Server{
 		cfg:             cfg,
@@ -84,6 +89,12 @@ func New(cfg config.Config) *Server {
 		startedAt:       time.Now(),
 	}
 }
+
+// SetFirstRun records that this launch found no pre-existing config.
+func (s *Server) SetFirstRun(b bool) { s.firstRun = b }
+
+// FirstRun reports whether the app started without a pre-existing config.
+func (s *Server) FirstRun() bool { return s.firstRun }
 
 // kickFrontierSync requests an immediate cAPI poll on the next tick of
 // the sync goroutine. Non-blocking: if the trigger is already pending,

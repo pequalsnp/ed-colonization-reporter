@@ -57,7 +57,8 @@ type App struct {
 	activityTab  *container.TabItem
 	unreadErrors int
 
-	trayDesk desktop.App
+	trayDesk     desktop.App
+	welcomeShown bool
 }
 
 // Run starts the Fyne app and blocks until the window is closed.
@@ -187,7 +188,51 @@ func (a *App) show(ctx context.Context) {
 		// the window never appears.
 		a.window.Hide()
 	}
+
+	// Show the first-run welcome dialog. SetOnShown fires AFTER the
+	// window is rendered, so the dialog appears on top properly.
+	if a.srv.FirstRun() {
+		a.app.Lifecycle().SetOnEnteredForeground(func() {
+			a.maybeShowWelcome()
+		})
+	}
+
 	a.window.ShowAndRun()
+}
+
+func (a *App) maybeShowWelcome() {
+	// One-shot — only fires the first time the foreground signal fires.
+	if a.welcomeShown {
+		return
+	}
+	a.welcomeShown = true
+
+	body := container.NewVBox(
+		labelLarge("Welcome to ED Colonization Reporter"),
+		labelWrapped(
+			"This app sits in the system tray and reports your "+
+				"Elite Dangerous colonization activity to ravencolonial.com "+
+				"and (optionally) the EDDN / EDSM / Inara community trackers.",
+		),
+		widget.NewLabel(""),
+		labelMuted("Quick start:"),
+		labelWrapped("1. Launch Elite Dangerous. The status bar will pick up your commander."),
+		labelWrapped("2. (Optional) Open Settings, paste your ravencolonial rcc-key for Fleet Carrier writes."),
+		labelWrapped("3. (Optional) Sign in with Frontier under Settings → Frontier cAPI for authoritative FC inventory."),
+		labelWrapped("4. (Optional) Enable EDDN / EDSM / Inara uploads if you'd like to contribute to the community trackers."),
+		widget.NewLabel(""),
+		labelMuted("Closing the window minimises to the tray. Use Ctrl+Q or tray → Quit to actually exit."),
+	)
+	openSettings := widget.NewButton("Open Settings", func() {
+		if a.tabs != nil && len(a.tabs.Items) >= 3 {
+			a.tabs.SelectIndex(2)
+		}
+	})
+	openSettings.Importance = widget.HighImportance
+	dlg := dialog.NewCustomWithoutButtons("Welcome", container.NewVBox(body, widget.NewLabel(""), container.NewHBox(openSettings)), a.window)
+	dlg.SetOnClosed(func() {})
+	dlg.Resize(fyne.NewSize(560, 460))
+	dlg.Show()
 }
 
 func (a *App) runStatusBarLoop(ctx context.Context) {
