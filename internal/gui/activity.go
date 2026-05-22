@@ -3,11 +3,15 @@ package gui
 import (
 	"fmt"
 	"image/color"
+	"strings"
 	"sync"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -25,11 +29,16 @@ type activityPanel struct {
 	levelEnabled map[reporter.Level]bool
 	paused       bool
 
-	list         *widget.List
-	chips        map[reporter.Level]*widget.Button
-	pauseBtn     *widget.Button
-	clearBtn     *widget.Button
-	countLbl     *canvas.Text
+	list      *widget.List
+	chips     map[reporter.Level]*widget.Button
+	pauseBtn  *widget.Button
+	clearBtn  *widget.Button
+	exportBtn *widget.Button
+	countLbl  *canvas.Text
+
+	// window is set by the App after construction so the Export dialog
+	// has a parent to anchor on.
+	window fyne.Window
 }
 
 func newActivityPanel() *activityPanel {
@@ -98,6 +107,8 @@ func newActivityPanel() *activityPanel {
 	p.pauseBtn = widget.NewButtonWithIcon("Pause", theme.MediaPauseIcon(), p.togglePause)
 	p.clearBtn = widget.NewButtonWithIcon("Clear", theme.ContentClearIcon(), p.clear)
 	p.clearBtn.Importance = widget.LowImportance
+	p.exportBtn = widget.NewButtonWithIcon("Export", theme.DocumentSaveIcon(), p.export)
+	p.exportBtn.Importance = widget.LowImportance
 
 	p.countLbl = canvas.NewText("0 entries", edFgMuted)
 	p.countLbl.TextSize = 12
@@ -111,7 +122,7 @@ func (p *activityPanel) content() fyne.CanvasObject {
 	for _, lvl := range []reporter.Level{reporter.LevelError, reporter.LevelWarn, reporter.LevelOK, reporter.LevelInfo} {
 		chipsRow.Add(p.chips[lvl])
 	}
-	rightRow := container.NewHBox(p.countLbl, p.pauseBtn, p.clearBtn)
+	rightRow := container.NewHBox(p.countLbl, p.pauseBtn, p.exportBtn, p.clearBtn)
 	toolbar := container.NewBorder(nil, nil, chipsRow, rightRow, widget.NewLabel(""))
 	return container.NewBorder(container.NewPadded(toolbar), nil, nil, nil, p.list)
 }
@@ -175,6 +186,45 @@ func (p *activityPanel) togglePause() {
 			p.pauseBtn.SetIcon(theme.MediaPauseIcon())
 		}
 	})
+}
+
+// export opens a save-as dialog and writes the currently-loaded
+// activity entries to a plain text file. Useful for bug reports.
+func (p *activityPanel) export() {
+	if p.window == nil {
+		return
+	}
+	p.mu.Lock()
+	snapshot := append([]reporter.Status(nil), p.entries...)
+	p.mu.Unlock()
+
+	dlg := dialog.NewFileSave(func(w fyne.URIWriteCloser, err error) {
+		if err != nil || w == nil {
+			return
+		}
+		defer w.Close()
+		var b strings.Builder
+		for _, s := range snapshot {
+			b.WriteString(formatStatus(s))
+			b.WriteString("\n")
+		}
+		_, _ = w.Write([]byte(b.String()))
+	}, p.window)
+	dlg.SetFileName(fmt.Sprintf("edcolreport-activity-%s.log", today()))
+	dlg.SetFilter(storage.NewExtensionFileFilter([]string{".log", ".txt"}))
+	dlg.Show()
+}
+
+// today returns YYYYMMDD-HHMMSS for the default filename.
+func today() string {
+	return time.Now().Format("20060102-150405")
+}
+
+// formatStatus renders a reporter.Status as one human-readable line.
+// Used by both the export button and (originally) the activity list
+// row renderer; kept package-private so both call sites stay aligned.
+func formatStatus(s reporter.Status) string {
+	return fmt.Sprintf("[%s] %-5s %s", s.Time.Format("15:04:05"), s.Level.String(), s.Message)
 }
 
 func (p *activityPanel) clear() {

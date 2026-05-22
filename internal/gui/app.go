@@ -91,6 +91,7 @@ func (a *App) show(ctx context.Context) {
 	a.projects = newProjectsPanel(a.srv)
 	a.projects.AttachPrefs(a.app.Preferences())
 	a.activity = newActivityPanel()
+	a.activity.window = a.window
 	a.settings = newSettingsPanel(a.srv)
 	a.frontierPanel = newFrontierPanel(a.srv)
 	a.destBar = newDestBar(a.srv)
