@@ -57,6 +57,16 @@ type projectsPanel struct {
 
 func newProjectsPanel(srv *web.Server) *projectsPanel {
 	p := &projectsPanel{srv: srv, expanded: map[string]bool{}, sortKey: sortOutstandingDesc}
+
+	// Render targets first — both the search OnChanged and the sort
+	// Select fire their callbacks synchronously on construction, which
+	// re-enters rerender(). rerender touches p.cards / p.empty so those
+	// MUST exist before any control-creation that wires a handler.
+	p.cards = container.NewVBox()
+	p.scroll = container.NewVScroll(p.cards)
+	p.empty = container.NewCenter(container.NewVBox())
+	p.empty.Hide()
+
 	p.summary = canvas.NewText("Loading…", edFgMuted)
 	p.summary.TextSize = 12
 	p.refresh = widget.NewButtonWithIcon("Refresh", theme.ViewRefreshIcon(), func() { go p.refreshNow() })
@@ -84,14 +94,6 @@ func newProjectsPanel(srv *web.Server) *projectsPanel {
 		p.rerender()
 	})
 	p.sortSel.SetSelected(sortLabelForKey(sortOutstandingDesc))
-
-	p.cards = container.NewVBox()
-	p.scroll = container.NewVScroll(p.cards)
-
-	// Empty state is built dynamically per render so the message can adapt
-	// to whether the commander is known yet.
-	p.empty = container.NewCenter(container.NewVBox())
-	p.empty.Hide()
 
 	return p
 }
