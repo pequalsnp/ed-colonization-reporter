@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"image/color"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -25,6 +26,8 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
+	"github.com/pequalsnp/ed-colonization-reporter/internal/config"
+	"github.com/pequalsnp/ed-colonization-reporter/internal/journal"
 	"github.com/pequalsnp/ed-colonization-reporter/internal/reporter"
 	"github.com/pequalsnp/ed-colonization-reporter/internal/web"
 )
@@ -355,14 +358,40 @@ func dashIfEmpty(s string) string {
 	return s
 }
 
-// buildMenu builds the main menu bar. File contains Refresh + Quit;
-// Help has the keyboard-shortcut reference and the About dialog.
+// buildMenu builds the main menu bar. File contains Refresh + folder
+// shortcuts + Quit; Help has the keyboard-shortcut reference and the
+// About dialog.
 func (a *App) buildMenu(tabs *container.AppTabs) *fyne.MainMenu {
 	refresh := fyne.NewMenuItem("Refresh projects", func() { a.projects.refreshNow() })
 	refresh.Shortcut = &fyne.ShortcutPaste{} // placeholder; shortcuts wired via Canvas already
+
+	openConfig := fyne.NewMenuItem("Open config folder", func() {
+		if p, err := config.Path(); err == nil {
+			_ = web.OpenBrowser(filepath.Dir(p))
+		}
+	})
+	openJournal := fyne.NewMenuItem("Open journal folder", func() {
+		dir := a.srv.Config().JournalDir
+		if dir == "" {
+			if d, err := journal.FindJournalDir(); err == nil {
+				dir = d
+			}
+		}
+		if dir != "" {
+			_ = web.OpenBrowser(dir)
+		}
+	})
+
 	quit := fyne.NewMenuItem("Quit", func() { a.window.Close() })
 
-	fileMenu := fyne.NewMenu("File", refresh, fyne.NewMenuItemSeparator(), quit)
+	fileMenu := fyne.NewMenu("File",
+		refresh,
+		fyne.NewMenuItemSeparator(),
+		openConfig,
+		openJournal,
+		fyne.NewMenuItemSeparator(),
+		quit,
+	)
 
 	repo := fyne.NewMenuItem("Open repository", func() {
 		_ = web.OpenBrowser("https://github.com/pequalsnp/ed-colonization-reporter")
