@@ -28,13 +28,15 @@ type activityPanel struct {
 	// Filter state — true means "show this level".
 	levelEnabled map[reporter.Level]bool
 	paused       bool
+	search       string // lowercased substring filter
 
-	list      *widget.List
-	chips     map[reporter.Level]*widget.Button
-	pauseBtn  *widget.Button
-	clearBtn  *widget.Button
-	exportBtn *widget.Button
-	countLbl  *canvas.Text
+	list       *widget.List
+	chips      map[reporter.Level]*widget.Button
+	pauseBtn   *widget.Button
+	clearBtn   *widget.Button
+	exportBtn  *widget.Button
+	searchBox  *widget.Entry
+	countLbl   *canvas.Text
 
 	// window is set by the App after construction so the Export dialog
 	// has a parent to anchor on.
@@ -110,6 +112,22 @@ func newActivityPanel() *activityPanel {
 	p.exportBtn = widget.NewButtonWithIcon("Export", theme.DocumentSaveIcon(), p.export)
 	p.exportBtn.Importance = widget.LowImportance
 
+	p.searchBox = widget.NewEntry()
+	p.searchBox.SetPlaceHolder("Filter messages…")
+	p.searchBox.OnChanged = func(text string) {
+		p.mu.Lock()
+		p.search = strings.ToLower(strings.TrimSpace(text))
+		p.recomputeVisibleLocked()
+		visCount := len(p.visible)
+		totalCount := len(p.entries)
+		p.mu.Unlock()
+		fyne.Do(func() {
+			p.countLbl.Text = fmt.Sprintf("%d / %d entries", visCount, totalCount)
+			p.countLbl.Refresh()
+			p.list.Refresh()
+		})
+	}
+
 	p.countLbl = canvas.NewText("0 entries", edFgMuted)
 	p.countLbl.TextSize = 12
 
@@ -117,13 +135,15 @@ func newActivityPanel() *activityPanel {
 }
 
 func (p *activityPanel) content() fyne.CanvasObject {
-	// Toolbar: [level chips] | spacer | count | pause | clear
+	// Top row: [level chips] | search | count | pause | export | clear
 	chipsRow := container.NewHBox()
 	for _, lvl := range []reporter.Level{reporter.LevelError, reporter.LevelWarn, reporter.LevelOK, reporter.LevelInfo} {
 		chipsRow.Add(p.chips[lvl])
 	}
 	rightRow := container.NewHBox(p.countLbl, p.pauseBtn, p.exportBtn, p.clearBtn)
-	toolbar := container.NewBorder(nil, nil, chipsRow, rightRow, widget.NewLabel(""))
+	topRow := container.NewBorder(nil, nil, chipsRow, rightRow, widget.NewLabel(""))
+	searchRow := container.NewBorder(nil, nil, widget.NewIcon(theme.SearchIcon()), nil, p.searchBox)
+	toolbar := container.NewVBox(topRow, searchRow)
 	return container.NewBorder(container.NewPadded(toolbar), nil, nil, nil, p.list)
 }
 
@@ -135,7 +155,7 @@ func (p *activityPanel) append(s reporter.Status) {
 		// since indices into entries[] just shifted.
 		p.entries = p.entries[len(p.entries)-1000:]
 		p.recomputeVisibleLocked()
-	} else if p.levelEnabled[s.Level] {
+	} else if p.levelEnabled[s.Level] && (p.search == "" || strings.Contains(strings.ToLower(s.Message), p.search)) {
 		// Fast path: just append the new entry's index to the visible list.
 		p.visible = append(p.visible, len(p.entries)-1)
 	}
@@ -250,9 +270,13 @@ func (p *activityPanel) isPaused() bool {
 func (p *activityPanel) recomputeVisibleLocked() {
 	p.visible = p.visible[:0]
 	for i, e := range p.entries {
-		if p.levelEnabled[e.Level] {
-			p.visible = append(p.visible, i)
+		if !p.levelEnabled[e.Level] {
+			continue
 		}
+		if p.search != "" && !strings.Contains(strings.ToLower(e.Message), p.search) {
+			continue
+		}
+		p.visible = append(p.visible, i)
 	}
 }
 
