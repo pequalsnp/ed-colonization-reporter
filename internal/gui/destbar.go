@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"image/color"
+	"strings"
+	"sync"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -12,12 +14,14 @@ import (
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/widget"
 
+	"github.com/pequalsnp/ed-colonization-reporter/internal/reporter"
 	"github.com/pequalsnp/ed-colonization-reporter/internal/web"
 )
 
 // destBar renders a footer row of small "destination chips" showing
-// each upload target's enabled state at a glance. Lives at the bottom
-// of the main window; polls config every few seconds so saves in the
+// each upload target's enabled state at a glance, plus per-destination
+// last-post health derived from the statusHub. Lives at the bottom of
+// the main window; polls config every few seconds so saves in the
 // Settings tab reflect immediately.
 type destBar struct {
 	srv *web.Server
@@ -26,6 +30,17 @@ type destBar struct {
 	url       *canvas.Text
 	lastEvent *canvas.Text
 	root      fyne.CanvasObject
+
+	// destHealth tracks the most recent classified outcome per
+	// destination name. Updated from the statusHub subscription;
+	// read by update().
+	healthMu sync.Mutex
+	health   map[string]destHealth
+}
+
+type destHealth struct {
+	LastOK  time.Time
+	LastErr time.Time
 }
 
 type destChip struct {
@@ -36,7 +51,7 @@ type destChip struct {
 }
 
 func newDestBar(srv *web.Server) *destBar {
-	b := &destBar{srv: srv, chips: map[string]*destChip{}}
+	b := &destBar{srv: srv, chips: map[string]*destChip{}, health: map[string]destHealth{}}
 
 	row := container.NewHBox()
 	for _, name := range []string{"RC", "FC sync", "EDDN", "EDSM", "Inara", "cAPI"} {
@@ -100,6 +115,12 @@ func labelMutedSmall(text string) fyne.CanvasObject {
 }
 
 func (b *destBar) runLoop(ctx context.Context) {
+	// Subscribe to the status hub so we can classify per-destination
+	// outcomes from message prefixes.
+	statusCh, cancelSub := b.srv.Subscribe()
+	defer cancelSub()
+	go b.classifyStatuses(ctx, statusCh)
+
 	// Faster cadence for the liveness indicator — 2s feels live.
 	t := time.NewTicker(2 * time.Second)
 	defer t.Stop()
@@ -114,25 +135,105 @@ func (b *destBar) runLoop(ctx context.Context) {
 	}
 }
 
+// classifyStatuses fans the status hub into per-destination health
+// based on message-prefix matching. Heuristic but covers the messages
+// the codebase actually emits today.
+func (b *destBar) classifyStatuses(ctx context.Context, ch <-chan reporter.Status) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case s, ok := <-ch:
+			if !ok {
+				return
+			}
+			b.classify(s)
+		}
+	}
+}
+
+func (b *destBar) classify(s reporter.Status) {
+	dest := matchDestination(s.Message)
+	if dest == "" {
+		return
+	}
+	b.healthMu.Lock()
+	defer b.healthMu.Unlock()
+	h := b.health[dest]
+	switch s.Level {
+	case reporter.LevelOK:
+		h.LastOK = s.Time
+	case reporter.LevelError:
+		h.LastErr = s.Time
+	}
+	b.health[dest] = h
+}
+
+// matchDestination returns the chip name the given status message
+// belongs to, or "" if it's a generic message we don't attribute.
+func matchDestination(msg string) string {
+	switch {
+	case strings.HasPrefix(msg, "EDDN"):
+		return "EDDN"
+	case strings.HasPrefix(msg, "EDSM"):
+		return "EDSM"
+	case strings.HasPrefix(msg, "Inara"):
+		return "Inara"
+	case strings.HasPrefix(msg, "Synced FC ") || strings.HasPrefix(msg, "Sync FC ") ||
+		strings.HasPrefix(msg, "FC cargo "):
+		return "FC sync"
+	case strings.HasPrefix(msg, "cAPI"):
+		return "cAPI"
+	case strings.HasPrefix(msg, "Published Fleet Carrier") ||
+		strings.HasPrefix(msg, "Created ravencolonial") ||
+		strings.HasPrefix(msg, "Reported depot") ||
+		strings.HasPrefix(msg, "Contributed to ") ||
+		strings.HasPrefix(msg, "Marked build ") ||
+		strings.HasPrefix(msg, "Set ") && strings.Contains(msg, "as architect"):
+		return "RC"
+	}
+	return ""
+}
+
+// healthColor picks the chip color from per-destination health: red if
+// the most recent outcome was an error within the last 5 minutes,
+// otherwise the destination's default colour.
+func healthColor(h destHealth, defaultColor color.Color) color.Color {
+	if !h.LastErr.IsZero() && h.LastErr.After(h.LastOK) {
+		if time.Since(h.LastErr) < 5*time.Minute {
+			return edStatusError
+		}
+	}
+	return defaultColor
+}
+
 func (b *destBar) update() {
 	cfg := b.srv.Config()
 	signedIn, _, _ := b.srv.FrontierStatus()
 
-	// RC is always "on" — we always post depot+contribution updates if
-	// the cmdr is present; rcc-key is only for FC writes.
+	// Per-destination health from the statusHub classifier.
+	b.healthMu.Lock()
+	health := make(map[string]destHealth, len(b.health))
+	for k, v := range b.health {
+		health[k] = v
+	}
+	b.healthMu.Unlock()
+
 	fyne.Do(func() {
-		b.chips["RC"].setEnabled(true, edStatusOK)
+		// RC is always "on" — we always post depot+contribution updates if
+		// the cmdr is present; rcc-key is only for FC writes.
+		b.chips["RC"].setEnabled(true, healthColor(health["RC"], edStatusOK))
 		// "FC sync" is on if we have an rcc-key (writes are possible).
 		fcWritable := cfg.APIKey != ""
 		fcColor := edStatusOK
 		if !fcWritable {
 			fcColor = edFgDim
 		}
-		b.chips["FC sync"].setEnabled(fcWritable, fcColor)
-		b.chips["EDDN"].setEnabled(cfg.EDDNEnabled, edStatusInfo)
-		b.chips["EDSM"].setEnabled(cfg.EDSMEnabled && cfg.EDSMAPIKey != "", edStatusInfo)
-		b.chips["Inara"].setEnabled(cfg.InaraEnabled && cfg.InaraAPIKey != "", edStatusInfo)
-		b.chips["cAPI"].setEnabled(cfg.FrontierCAPIEnabled && signedIn, edOrange)
+		b.chips["FC sync"].setEnabled(fcWritable, healthColor(health["FC sync"], fcColor))
+		b.chips["EDDN"].setEnabled(cfg.EDDNEnabled, healthColor(health["EDDN"], edStatusInfo))
+		b.chips["EDSM"].setEnabled(cfg.EDSMEnabled && cfg.EDSMAPIKey != "", healthColor(health["EDSM"], edStatusInfo))
+		b.chips["Inara"].setEnabled(cfg.InaraEnabled && cfg.InaraAPIKey != "", healthColor(health["Inara"], edStatusInfo))
+		b.chips["cAPI"].setEnabled(cfg.FrontierCAPIEnabled && signedIn, healthColor(health["cAPI"], edOrange))
 
 		if u := b.srv.URL(); u != "" {
 			b.url.Text = u
