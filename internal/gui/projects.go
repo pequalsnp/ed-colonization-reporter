@@ -3,6 +3,7 @@ package gui
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"sync"
 	"time"
 
@@ -156,7 +157,9 @@ func buildProjectCard(p ravencolonial.Project) fyne.CanvasObject {
 
 	statusBadge := makeBadge(statusBadgeText(p), statusBadgeColor(p))
 
-	header := container.NewBorder(nil, nil, container.NewVBox(systemLbl, buildLbl), statusBadge, layout.NewSpacer())
+	// Right side of the header: open-in-browser link plus status badge.
+	headerRight := container.NewHBox(openOnWebsiteButton(p), statusBadge)
+	header := container.NewBorder(nil, nil, container.NewVBox(systemLbl, buildLbl), headerRight, layout.NewSpacer())
 
 	outstanding := 0
 	for _, n := range p.Commodities {
@@ -231,6 +234,21 @@ func commoditiesLine(commodities map[string]int) fyne.CanvasObject {
 		row.Add(container.NewPadded(tail))
 	}
 	return container.NewHScroll(row)
+}
+
+// openOnWebsiteButton returns a small icon button that opens the
+// project's ravencolonial.com page in the user's default browser.
+// Returns an empty container if there's no BuildID to link to.
+func openOnWebsiteButton(p ravencolonial.Project) fyne.CanvasObject {
+	if p.BuildID == "" {
+		return container.NewWithoutLayout()
+	}
+	target := "https://ravencolonial.com/#build=" + url.PathEscape(p.BuildID)
+	btn := widget.NewButtonWithIcon("", theme.ComputerIcon(), func() {
+		_ = web.OpenBrowser(target)
+	})
+	btn.Importance = widget.LowImportance
+	return btn
 }
 
 func statusBadgeText(p ravencolonial.Project) string {
