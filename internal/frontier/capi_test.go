@@ -205,6 +205,34 @@ func TestCommodityKey(t *testing.T) {
 	}
 }
 
+func TestFleetCarrier_AcceptsMultipleMarketIDFieldNames(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want int64
+	}{
+		{"snake_case", `{"market_id": 3700000123, "cargo": []}`, 3700000123},
+		{"camelCase", `{"marketId": 3700000123, "cargo": []}`, 3700000123},
+		{"nested_market_id", `{"market": {"id": 3700000123}, "cargo": []}`, 3700000123},
+		{"plain_id_fallback", `{"id": 3700000123, "cargo": []}`, 3700000123},
+		{"none_present", `{"cargo": []}`, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var fc FleetCarrier
+			if err := json.Unmarshal([]byte(tc.body), &fc); err != nil {
+				t.Fatalf("Unmarshal: %v", err)
+			}
+			if fc.MarketID != tc.want {
+				t.Errorf("MarketID = %d, want %d", fc.MarketID, tc.want)
+			}
+			if len(fc.RawBody) == 0 {
+				t.Error("RawBody should be captured")
+			}
+		})
+	}
+}
+
 // TestFleetCarrier_DecodesMissionPolymorphism pins the case that broke
 // us in production: cAPI returns `"mission": false` on non-mission rows
 // and `"mission": <int>` on mission rows. Since we don't model the

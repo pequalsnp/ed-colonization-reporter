@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -77,14 +79,60 @@ type FleetCarrierCargoItem struct {
 // FleetCarrier is the parsed subset of /fleetcarrier we use. Frontier
 // returns much more (modules, services, finance, …); we keep only what
 // drives cargo sync.
+//
+// MarketID handling: cAPI's exact field name has varied between
+// snake_case and camelCase across endpoints and patches. We accept
+// whichever shape shows up via custom UnmarshalJSON. RawBody is kept so
+// callers can dump it for diagnostics when the parse comes up empty.
 type FleetCarrier struct {
 	Name struct {
 		Filtered string `json:"filteredVanityName"`
 		Callsign string `json:"callsign"`
 	} `json:"name"`
-	MarketID         int64                   `json:"market_id"`
-	CurrentStarSystem string                 `json:"currentStarSystem"`
-	Cargo            []FleetCarrierCargoItem `json:"cargo"`
+	MarketID          int64                   `json:"-"`
+	CurrentStarSystem string                  `json:"currentStarSystem"`
+	Cargo             []FleetCarrierCargoItem `json:"cargo"`
+
+	// RawBody holds the verbatim response for diagnostic dumps. Not used
+	// in equality checks; not exported via JSON.
+	RawBody []byte `json:"-"`
+}
+
+// UnmarshalJSON accepts FC payloads with any of the historically-observed
+// market-id field name shapes: `market_id`, `marketId`, `id`, or a nested
+// `market.id`. Whichever has a non-zero value wins.
+func (fc *FleetCarrier) UnmarshalJSON(data []byte) error {
+	// Use an alias type so the recursive call doesn't loop back into this method.
+	type alias FleetCarrier
+	var a alias
+	if err := json.Unmarshal(data, &a); err != nil {
+		return err
+	}
+	*fc = FleetCarrier(a)
+	fc.RawBody = append([]byte(nil), data...)
+
+	// Probe several historically-observed locations for the MarketID.
+	var probe struct {
+		MarketIDSnake int64 `json:"market_id"`
+		MarketIDCamel int64 `json:"marketId"`
+		IDPlain       int64 `json:"id"`
+		Market        struct {
+			ID int64 `json:"id"`
+		} `json:"market"`
+	}
+	if err := json.Unmarshal(data, &probe); err == nil {
+		switch {
+		case probe.MarketIDSnake != 0:
+			fc.MarketID = probe.MarketIDSnake
+		case probe.MarketIDCamel != 0:
+			fc.MarketID = probe.MarketIDCamel
+		case probe.Market.ID != 0:
+			fc.MarketID = probe.Market.ID
+		case probe.IDPlain != 0:
+			fc.MarketID = probe.IDPlain
+		}
+	}
+	return nil
 }
 
 // FleetCarrier fetches the current commander's FC. Returns ErrFleetCarrierRateLimited
@@ -106,11 +154,50 @@ func (c *CAPI) FleetCarrier(ctx context.Context) (*FleetCarrier, error) {
 	if err := json.Unmarshal(body, &fc); err != nil {
 		return nil, fmt.Errorf("frontier capi: decode /fleetcarrier: %w", err)
 	}
+	fc.RawBody = body
 
 	c.mu.Lock()
 	c.lastFC = time.Now()
 	c.mu.Unlock()
 	return &fc, nil
+}
+
+// DumpResponse writes the last raw /fleetcarrier response to path. The
+// UI calls this when MarketID parses as 0 so the operator can inspect
+// the actual shape Frontier sent.
+func (fc *FleetCarrier) DumpResponse(path string) error {
+	if len(fc.RawBody) == 0 {
+		return errors.New("no raw response captured")
+	}
+	return writeFileAtomic(path, fc.RawBody, 0o600)
+}
+
+// writeFileAtomic is a small private helper; the FileTokenStore in
+// tokens.go has equivalent logic but we avoid coupling the two modules.
+func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".dump-*.json")
+	if err != nil {
+		return err
+	}
+	name := tmp.Name()
+	if err := tmp.Chmod(mode); err != nil {
+		tmp.Close()
+		os.Remove(name)
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(name)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(name)
+		return err
+	}
+	return os.Rename(name, path)
 }
 
 // ErrFleetCarrierRateLimited is returned when a /fleetcarrier call would

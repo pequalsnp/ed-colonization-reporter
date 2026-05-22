@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/pequalsnp/ed-colonization-reporter/internal/frontier"
@@ -70,9 +72,26 @@ func (s *Server) pollFleetCarrier(ctx context.Context) {
 		return
 	}
 	if fc.MarketID == 0 {
+		// Could mean the commander really has no FC, or that Frontier
+		// shipped a payload shape we don't recognise. Dump the response
+		// so an operator can paste it back; preview a tiny snippet in
+		// the activity log so the symptom is at least visible.
+		dumpPath := filepath.Join(filepath.Dir(resolveFrontierTokenPath()), "fleetcarrier_debug.json")
+		hint := ""
+		if err := fc.DumpResponse(dumpPath); err == nil {
+			hint = " (raw response dumped to " + dumpPath + ")"
+		}
+		preview := ""
+		if len(fc.RawBody) > 0 {
+			n := 120
+			if n > len(fc.RawBody) {
+				n = len(fc.RawBody)
+			}
+			preview = " — first " + strconv.Itoa(n) + " bytes: " + string(fc.RawBody[:n])
+		}
 		s.hub.Publish(reporter.Status{
-			Time: time.Now(), Level: reporter.LevelInfo,
-			Message: "cAPI: commander has no Fleet Carrier",
+			Time: time.Now(), Level: reporter.LevelWarn,
+			Message: "cAPI returned a FleetCarrier with no recognised MarketID field" + hint + preview,
 		})
 		return
 	}
