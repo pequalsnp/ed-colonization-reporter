@@ -93,6 +93,7 @@ func (a *App) show(ctx context.Context) {
 	a.activity = newActivityPanel()
 	a.activity.window = a.window
 	a.settings = newSettingsPanel(a.srv)
+	a.settings.window = a.window
 	a.frontierPanel = newFrontierPanel(a.srv)
 	a.destBar = newDestBar(a.srv)
 

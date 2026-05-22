@@ -15,6 +15,8 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -27,7 +29,8 @@ import (
 // settingsPanel groups the configuration into titled cards so the form
 // doesn't read as one giant flat list.
 type settingsPanel struct {
-	srv *web.Server
+	srv    *web.Server
+	window fyne.Window // set by App after construction
 
 	journalDir, apiBase, apiKey, cmdrOverride             *widget.Entry
 	edsmKey, inaraKey                                     *widget.Entry
@@ -156,6 +159,32 @@ func (p *settingsPanel) updateJournalStatus() {
 		p.journalStatus.Color = color
 		p.journalStatus.Refresh()
 	})
+}
+
+// browseJournalDir opens a native folder-picker dialog. On select, the
+// chosen path is written into the journal_dir entry, which triggers
+// the live validation indicator.
+func (p *settingsPanel) browseJournalDir() {
+	if p.window == nil {
+		return
+	}
+	dlg := dialog.NewFolderOpen(func(uri fyne.ListableURI, err error) {
+		if err != nil || uri == nil {
+			return
+		}
+		// Strip the file:// scheme so the entry shows a friendly path.
+		path := uri.Path()
+		fyne.Do(func() { p.journalDir.SetText(path) })
+	}, p.window)
+	// Seed the dialog at the currently-configured (or auto-detected)
+	// directory if there is one.
+	if start := strings.TrimSpace(p.journalDir.Text); start != "" {
+		if uri, err := storage.ListerForURI(storage.NewFileURI(start)); err == nil {
+			dlg.SetLocation(uri)
+		}
+	}
+	dlg.Resize(fyne.NewSize(720, 540))
+	dlg.Show()
 }
 
 func countJournalFiles(dir string) int {
@@ -391,9 +420,13 @@ func passwordEntry(initial, placeholder string) *widget.Entry {
 }
 
 func (p *settingsPanel) content(frontier *frontierPanel) fyne.CanvasObject {
+	browseBtn := widget.NewButtonWithIcon("Browse…", theme.FolderOpenIcon(), p.browseJournalDir)
+	browseBtn.Importance = widget.LowImportance
+	journalRow := container.NewBorder(nil, nil, nil, browseBtn, p.journalDir)
+
 	localCard := section("Local",
 		"Where your journal lives and how the app behaves at startup.",
-		formItem("Journal directory", p.journalDir),
+		formItem("Journal directory", journalRow),
 		container.NewPadded(p.journalStatus),
 		formItem("Commander override", p.cmdrOverride),
 		checkboxRow(p.replaySession),
