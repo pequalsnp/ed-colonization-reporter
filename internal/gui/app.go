@@ -42,6 +42,7 @@ type App struct {
 	activity      *activityPanel
 	settings      *settingsPanel
 	frontierPanel *frontierPanel
+	destBar       *destBar
 }
 
 // Run starts the Fyne app and blocks until the window is closed.
@@ -69,6 +70,7 @@ func (a *App) show(ctx context.Context) {
 	a.activity = newActivityPanel()
 	a.settings = newSettingsPanel(a.srv)
 	a.frontierPanel = newFrontierPanel(a.srv)
+	a.destBar = newDestBar(a.srv)
 
 	tabs := container.NewAppTabs(
 		container.NewTabItemWithIcon("Projects", theme.GridIcon(), a.projects.content()),
@@ -79,11 +81,14 @@ func (a *App) show(ctx context.Context) {
 
 	// Thin orange divider line under the status bar — same trick the ED
 	// in-game HUD uses to separate header from body.
-	divider := canvas.NewRectangle(edOrange)
-	divider.SetMinSize(fyne.NewSize(0, 1))
+	topDivider := canvas.NewRectangle(edOrange)
+	topDivider.SetMinSize(fyne.NewSize(0, 1))
+	bottomDivider := canvas.NewRectangle(edBorder)
+	bottomDivider.SetMinSize(fyne.NewSize(0, 1))
 
-	header := container.NewVBox(a.statusBar.content(), divider)
-	root := container.NewBorder(header, nil, nil, nil, tabs)
+	header := container.NewVBox(a.statusBar.content(), topDivider)
+	footer := container.NewVBox(bottomDivider, a.destBar.content())
+	root := container.NewBorder(header, footer, nil, nil, tabs)
 	a.window.SetContent(root)
 
 	subCtx, cancel := context.WithCancel(ctx)
@@ -96,6 +101,7 @@ func (a *App) show(ctx context.Context) {
 	go a.runActivityLoop(subCtx)
 	go a.projects.runAutoRefresh(subCtx)
 	go a.frontierPanel.runStatusLoop(subCtx)
+	go a.destBar.runLoop(subCtx)
 
 	a.window.ShowAndRun()
 }
