@@ -99,7 +99,9 @@
         return;
       }
 
-      const dest = 'http://localhost:' + port + '/frontier/callback?' +
+      // Use 127.0.0.1 explicitly: the desktop app binds an IPv4 loopback;
+      // some systems resolve `localhost` to ::1 first and would miss it.
+      const dest = 'http://127.0.0.1:' + port + '/frontier/callback?' +
                    'code=' + encodeURIComponent(code) +
                    '&state=' + encodeURIComponent(state);
 

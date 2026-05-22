@@ -13,6 +13,8 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -21,6 +23,7 @@ import (
 	"github.com/pequalsnp/ed-colonization-reporter/internal/destinations/eddn"
 	"github.com/pequalsnp/ed-colonization-reporter/internal/destinations/edsm"
 	"github.com/pequalsnp/ed-colonization-reporter/internal/destinations/inara"
+	"github.com/pequalsnp/ed-colonization-reporter/internal/frontier"
 	"github.com/pequalsnp/ed-colonization-reporter/internal/journal"
 	"github.com/pequalsnp/ed-colonization-reporter/internal/ravencolonial"
 	"github.com/pequalsnp/ed-colonization-reporter/internal/reporter"
@@ -49,6 +52,10 @@ type Server struct {
 	edsm    *edsm.Uploader
 	inara   *inara.Uploader
 	mux     *destinations.Multiplex
+
+	frontierFlow *frontier.FlowManager
+	frontierCAPI *frontier.CAPI
+	frontierStore frontier.TokenStore
 
 	hub      *statusHub
 	listener net.Listener
@@ -171,6 +178,26 @@ func (s *Server) initSessionAndReporter() error {
 	s.inara.SetAPIKey(s.cfg.InaraAPIKey)
 	s.inara.SetEnabled(s.cfg.InaraEnabled)
 
+	// Frontier OAuth + cAPI. Token file lives next to the regular config so
+	// it inherits user-only directory permissions.
+	tokenPath := resolveFrontierTokenPath()
+	s.frontierStore = frontier.NewFileTokenStore(tokenPath)
+	oauth := frontier.NewClient()
+	clientID := s.cfg.FrontierClientID
+	if clientID == "" {
+		clientID = frontier.DefaultClientID
+	}
+	s.frontierCAPI = frontier.NewCAPI(oauth, clientID, s.frontierStore)
+	s.frontierFlow = frontier.NewFlowManager(oauth, s.frontierStore)
+	s.frontierFlow.ClientID = clientID
+	s.frontierFlow.OnTokens = func(t *frontier.Tokens) {
+		s.frontierCAPI.SetTokens(t)
+		s.hub.Publish(reporter.Status{
+			Time: time.Now(), Level: reporter.LevelOK,
+			Message: "Signed in with Frontier (cAPI tokens cached)",
+		})
+	}
+
 	s.mux = destinations.NewMultiplex(s.rep, s.eddn, s.edsm, s.inara)
 	s.mux.OnError = func(name string, err error) {
 		// Don't surface per-event errors here — destinations emit their own
@@ -179,6 +206,17 @@ func (s *Server) initSessionAndReporter() error {
 		_ = err
 	}
 	return nil
+}
+
+// resolveFrontierTokenPath returns the file path for the Frontier OAuth
+// token store. Sits in the same XDG/AppData directory as config.toml so
+// the parent dir's perms cover both files.
+func resolveFrontierTokenPath() string {
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return filepath.Join(os.TempDir(), "edcolreport-frontier-tokens.json")
+	}
+	return filepath.Join(dir, "ed-colonization-reporter", "frontier_tokens.json")
 }
 
 // parseLevel maps a string log level to the reporter.Level enum.

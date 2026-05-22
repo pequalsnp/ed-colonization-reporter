@@ -120,6 +120,23 @@
             <input name="inara_api_key" type="password" placeholder="from inara.cz/settings-api/">
           </label>
         </fieldset>
+        <fieldset style="border: 1px solid #2a2a30; border-radius: 4px; padding: 12px 16px; margin: 4px 0;">
+          <legend style="color: #9ca0a8; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; padding: 0 6px;">Frontier cAPI (authoritative FC inventory)</legend>
+          <p class="notice" style="margin: 4px 0 12px;">
+            Signing in with Frontier lets us call the official <code style="background:#1f1f25;padding:1px 4px;border-radius:3px">/fleetcarrier</code> endpoint
+            for the ground-truth FC cargo state (refreshed every 15 minutes).
+            Uses PKCE — no client secret leaves your machine.
+          </p>
+          <label class="row" style="margin: 4px 0;">
+            <input name="frontier_capi_enabled" type="checkbox">
+            <span>Use cAPI for FC inventory ground-truth (recommended once signed in)</span>
+          </label>
+          <div class="row-actions" style="margin-top: 12px;">
+            <span id="frontier-status" class="notice">…</span>
+            <button type="button" class="action" id="frontier-signin">Sign in with Frontier</button>
+            <button type="button" class="action secondary hidden" id="frontier-signout">Sign out</button>
+          </div>
+        </fieldset>
         <div class="row-actions">
           <button type="submit">Save</button>
           <span class="notice" id="settings-notice"></span>
@@ -219,8 +236,63 @@
         f.edsm_api_key.value = j.edsm_api_key || '';
         f.inara_enabled.checked = !!j.inara_enabled;
         f.inara_api_key.value = j.inara_api_key || '';
+        f.frontier_capi_enabled.checked = !!j.frontier_capi_enabled;
       } catch {}
     })();
+    // Frontier OAuth UI.
+    async function refreshFrontierStatus() {
+      try {
+        const r = await fetch('/api/frontier/status');
+        if (!r.ok) return;
+        const j = await r.json();
+        const status = $('frontier-status');
+        const signInBtn = $('frontier-signin');
+        const signOutBtn = $('frontier-signout');
+        if (j.signed_in) {
+          let txt = 'Signed in';
+          if (j.expires_at) {
+            const exp = new Date(j.expires_at);
+            txt += ' — token expires ' + exp.toLocaleString();
+          }
+          if (j.expired) txt += ' (will refresh on next use)';
+          status.textContent = txt;
+          signInBtn.classList.add('hidden');
+          signOutBtn.classList.remove('hidden');
+        } else {
+          status.textContent = 'Not signed in.';
+          signInBtn.classList.remove('hidden');
+          signOutBtn.classList.add('hidden');
+        }
+      } catch {}
+    }
+    refreshFrontierStatus();
+    setInterval(refreshFrontierStatus, 10000);
+
+    $('frontier-signin').addEventListener('click', async () => {
+      try {
+        const r = await fetch('/api/frontier/signin', { method: 'POST' });
+        if (!r.ok) {
+          const t = await r.text();
+          $('frontier-status').textContent = 'Sign-in start failed: ' + t;
+          return;
+        }
+        const j = await r.json();
+        $('frontier-status').textContent = 'Opening Frontier auth in a new tab — finish in your browser then return here.';
+        window.open(j.auth_url, '_blank');
+      } catch (e) {
+        $('frontier-status').textContent = 'Sign-in error: ' + e.message;
+      }
+    });
+
+    $('frontier-signout').addEventListener('click', async () => {
+      try {
+        await fetch('/api/frontier/signout', { method: 'POST' });
+        refreshFrontierStatus();
+      } catch (e) {
+        $('frontier-status').textContent = 'Sign-out error: ' + e.message;
+      }
+    });
+
     $('settings-form').addEventListener('submit', async ev => {
       ev.preventDefault();
       const f = ev.target;
@@ -235,6 +307,7 @@
         edsm_api_key: f.edsm_api_key.value,
         inara_enabled: f.inara_enabled.checked,
         inara_api_key: f.inara_api_key.value,
+        frontier_capi_enabled: f.frontier_capi_enabled.checked,
       };
       $('settings-notice').textContent = 'Saving…';
       try {
