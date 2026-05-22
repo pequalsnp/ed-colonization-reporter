@@ -305,6 +305,68 @@ func TestHandleCargoTransfer_SkipsWhenUndocked(t *testing.T) {
 	}
 }
 
+func TestHandleCargoTransfer_SkipsOnReplayed(t *testing.T) {
+	sess := state.New()
+	sess.SetCommander("Jameson", "F1")
+	sess.RegisterOwnedCarrier(state.OwnedCarrier{MarketID: 42, Name: "X", Callsign: "Y"})
+	sess.SetDocked("X Y", 42, 100)
+	api := &fakeAPI{}
+	r := New(api, sess)
+	raw := mustRaw(t, journal.EventCargoTransfer, map[string]any{
+		"Transfers": []map[string]any{{"Type": "cmmcomposite", "Count": 2464, "Direction": "tocarrier"}},
+	})
+	raw.Replayed = true // backfill — must NOT PATCH again
+	if err := r.HandleEvent(context.Background(), raw); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if len(api.fcCargoPatches) != 0 {
+		t.Errorf("replayed CargoTransfer must not PATCH; got %v", api.fcCargoPatches)
+	}
+}
+
+func TestHandleContribution_SkipsOnReplayed(t *testing.T) {
+	sess := setupSession()
+	sess.RememberBuild(3789012345, "build-1")
+	api := &fakeAPI{}
+	r := New(api, sess)
+	raw := mustRaw(t, journal.EventColonisationContribution, map[string]any{
+		"MarketID":      3789012345,
+		"Contributions": []map[string]any{{"Name": "$titanium_name;", "Amount": 32}},
+	})
+	raw.Replayed = true // backfill — must NOT double-credit
+	if err := r.HandleEvent(context.Background(), raw); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if len(api.contributions) != 0 {
+		t.Errorf("replayed contribution must not POST; got %v", api.contributions)
+	}
+}
+
+func TestHandleDepot_StillProcessesOnReplayed(t *testing.T) {
+	// Depot updates are idempotent — they overwrite the server state with
+	// the absolute outstanding-needs map — so they're safe to re-fire on
+	// backfill. This guards against accidentally extending the replay
+	// skip to handlers that don't need it.
+	sess := setupSession()
+	api := &fakeAPI{
+		lookupResp: map[lookupKey]*ravencolonial.Project{
+			{10477373803, 3789012345}: {BuildID: "build-1"},
+		},
+	}
+	r := New(api, sess)
+	raw := mustRaw(t, journal.EventColonisationConstructionDepot, map[string]any{
+		"MarketID":          3789012345,
+		"ResourcesRequired": []map[string]any{{"Name": "$titanium_name;", "RequiredAmount": 1000, "ProvidedAmount": 400}},
+	})
+	raw.Replayed = true
+	if err := r.HandleEvent(context.Background(), raw); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if len(api.updates) != 1 {
+		t.Errorf("idempotent depot update must still fire on replay; got %d", len(api.updates))
+	}
+}
+
 func TestHandleCargoTransfer_AggregatesMultipleRowsSameCommodity(t *testing.T) {
 	sess := state.New()
 	sess.SetCommander("Jameson", "F1")

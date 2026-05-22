@@ -37,9 +37,17 @@ type Envelope struct {
 // Raw is an event line that has been split into its envelope metadata and
 // the unparsed JSON payload. Holding the payload lets callers decode into
 // whichever event-specific struct they need without re-parsing the line.
+//
+// Replayed is true when this event was read during the initial backfill
+// pass (StartAtBeginning, before we caught up to the file's current end).
+// Consumers with non-idempotent server-side effects — `ColonisationContribution`
+// would re-attribute, `CargoTransfer` would re-apply a delta — must skip
+// these. Events read after the first time we hit EOF are flagged
+// Replayed=false.
 type Raw struct {
 	Envelope
-	Payload []byte
+	Payload  []byte
+	Replayed bool
 }
 
 // ParseLine parses a single journal line. Returns ErrEmptyLine for empty or

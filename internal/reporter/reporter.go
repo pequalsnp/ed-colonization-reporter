@@ -162,6 +162,12 @@ func (r *Reporter) HandleEvent(ctx context.Context, raw journal.Raw) error {
 		}
 		return r.handleDepot(ctx, e)
 	case journal.EventColonisationContribution:
+		if raw.Replayed {
+			// Skipping replayed contributions: ravencolonial's
+			// /contribute endpoint accumulates per-call. Re-firing it on
+			// every backfill would double-credit the commander.
+			return nil
+		}
 		var e journal.ColonisationContributionEvent
 		if err := json.Unmarshal(raw.Payload, &e); err != nil {
 			return fmt.Errorf("contribution: %w", err)
@@ -207,6 +213,12 @@ func (r *Reporter) HandleEvent(ctx context.Context, raw journal.Raw) error {
 		}
 		return r.handleMarket(ctx, e)
 	case journal.EventCargoTransfer:
+		if raw.Replayed {
+			// Skipping replayed cargo transfers: PatchCarrierCargo applies
+			// a server-side delta. Re-firing on every backfill multiplies
+			// FC cargo on ravencolonial by the number of restarts.
+			return nil
+		}
 		var e journal.CargoTransferEvent
 		if err := json.Unmarshal(raw.Payload, &e); err != nil {
 			return fmt.Errorf("cargotransfer: %w", err)

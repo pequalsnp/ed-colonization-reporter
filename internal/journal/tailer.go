@@ -70,6 +70,12 @@ func (t *Tailer) Run(ctx context.Context, out chan<- Raw) error {
 	// write happens mid-line and we observe an incomplete trailing fragment.
 	var partial []byte
 
+	// replaying is true while we're emitting events from before the file's
+	// current EOF on a fresh StartAtBeginning open. It flips to false the
+	// first time readMore reaches EOF, so every event read after that is
+	// flagged as a "live" event.
+	replaying := t.StartAt == StartAtBeginning
+
 	emit := func(raw Raw) error {
 		select {
 		case out <- raw:
@@ -131,12 +137,18 @@ func (t *Tailer) Run(ctx context.Context, out chan<- Raw) error {
 					if perr != nil {
 						continue // skip empty/garbage lines
 					}
+					raw.Replayed = replaying
 					if eerr := emit(raw); eerr != nil {
 						return eerr
 					}
 				}
 			}
 			if err == io.EOF {
+				// We've drained the file. Anything that arrives next is
+				// genuinely new — flip out of replay mode for future reads.
+				if replaying {
+					replaying = false
+				}
 				return nil
 			}
 			if err != nil {
