@@ -180,6 +180,7 @@ func (a *App) show(ctx context.Context) {
 	go a.projects.runAutoRefresh(subCtx)
 	go a.frontierPanel.runStatusLoop(subCtx)
 	go a.destBar.runLoop(subCtx)
+	go a.runUpdateCheck(subCtx)
 
 	a.window.ShowAndRun()
 }
@@ -374,6 +375,7 @@ func (a *App) buildMenu(tabs *container.AppTabs) *fyne.MainMenu {
 		_ = web.OpenBrowser("https://github.com/pequalsnp/ed-colonization-reporter")
 	})
 	shortcuts := fyne.NewMenuItem("Keyboard shortcuts…", a.showShortcutsDialog)
+	checkUpdate := fyne.NewMenuItem("Check for updates", func() { go a.runUpdateCheckNow() })
 	about := fyne.NewMenuItem("About", a.showAboutDialog)
 
 	// External destination quick-links so a new user can find the
@@ -389,7 +391,7 @@ func (a *App) buildMenu(tabs *container.AppTabs) *fyne.MainMenu {
 		fyne.NewMenuItem("Frontier developer zone", openLink("https://user.frontierstore.net/")),
 	)
 
-	helpMenu := fyne.NewMenu("Help", shortcuts, links, repo, fyne.NewMenuItemSeparator(), about)
+	helpMenu := fyne.NewMenu("Help", shortcuts, links, repo, checkUpdate, fyne.NewMenuItemSeparator(), about)
 
 	return fyne.NewMainMenu(fileMenu, helpMenu)
 }
@@ -458,6 +460,62 @@ func labelWrapped(s string) fyne.CanvasObject {
 func mustURL(s string) *url.URL {
 	u, _ := url.Parse(s)
 	return u
+}
+
+// runUpdateCheck is the startup hook. Delays briefly so it doesn't
+// race with sign-in and other startup work, then queries GitHub once.
+// Failure is logged silently — an offline user shouldn't see an
+// "update check failed" toast on every launch.
+func (a *App) runUpdateCheck(ctx context.Context) {
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(30 * time.Second):
+	}
+	info, err := checkForUpdate(ctx, a.srv.GetVersion())
+	if err != nil {
+		return
+	}
+	if info.NewerThanCurrent {
+		a.notify("Update available",
+			fmt.Sprintf("%s is out. You're on %s. Open Help → Check for updates for the link.",
+				info.LatestTag, info.Current))
+	}
+}
+
+// runUpdateCheckNow is the manual menu hook. Shows a dialog with the
+// result regardless of whether an update is available.
+func (a *App) runUpdateCheckNow() {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	info, err := checkForUpdate(ctx, a.srv.GetVersion())
+	if err != nil {
+		fyne.Do(func() {
+			dialog.ShowError(err, a.window)
+		})
+		return
+	}
+	fyne.Do(func() {
+		body := container.NewVBox(
+			labelMuted("You are running:"),
+			labelLarge(info.Current),
+			widget.NewLabel(""),
+			labelMuted("Latest release on GitHub:"),
+			labelLarge(info.LatestTag),
+		)
+		if info.NewerThanCurrent {
+			body.Add(widget.NewLabel(""))
+			body.Add(labelLarge("An update is available."))
+			body.Add(widget.NewHyperlink("Download the release",
+				mustURL(info.LatestURL)))
+		} else {
+			body.Add(widget.NewLabel(""))
+			body.Add(labelMuted("You're on the latest release."))
+		}
+		dlg := dialog.NewCustom("Update check", "Close", body, a.window)
+		dlg.Resize(fyne.NewSize(420, 280))
+		dlg.Show()
+	})
 }
 
 // registerShortcuts wires standard desktop keyboard shortcuts. Fyne's
