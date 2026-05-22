@@ -419,6 +419,25 @@ func passwordEntry(initial, placeholder string) *widget.Entry {
 	return e
 }
 
+// passwordRow wraps a password entry with a small "eye" button that
+// toggles masking. Useful for verifying that a long API key was typed
+// correctly — paste the key, click the eye, glance, click again.
+func passwordRow(e *widget.Entry) fyne.CanvasObject {
+	var btn *widget.Button
+	btn = widget.NewButtonWithIcon("", theme.VisibilityIcon(), func() {
+		if e.Password {
+			e.Password = false
+			btn.SetIcon(theme.VisibilityOffIcon())
+		} else {
+			e.Password = true
+			btn.SetIcon(theme.VisibilityIcon())
+		}
+		e.Refresh()
+	})
+	btn.Importance = widget.LowImportance
+	return container.NewBorder(nil, nil, nil, btn, e)
+}
+
 func (p *settingsPanel) content(frontier *frontierPanel) fyne.CanvasObject {
 	browseBtn := widget.NewButtonWithIcon("Browse…", theme.FolderOpenIcon(), p.browseJournalDir)
 	browseBtn.Importance = widget.LowImportance
@@ -436,14 +455,14 @@ func (p *settingsPanel) content(frontier *frontierPanel) fyne.CanvasObject {
 		"Colonization project tracking. Anonymous; the rcc-key is only needed for Fleet Carrier writes.",
 		formItem("API base URL", p.apiBase),
 		container.NewBorder(nil, nil, nil, p.rcTestBtn, p.rcTestStatus),
-		formItem("rcc-key", p.apiKey),
+		formItem("rcc-key", passwordRow(p.apiKey)),
 	)
 
 	eddnRow := checkboxRow(p.eddnEnabled)
 	edsmTestRow := container.NewBorder(nil, nil, nil, p.edsmTestBtn, p.edsmTestStatus)
-	edsmRow := container.NewVBox(checkboxRow(p.edsmEnabled), formItem("API key", p.edsmKey), edsmTestRow)
+	edsmRow := container.NewVBox(checkboxRow(p.edsmEnabled), formItem("API key", passwordRow(p.edsmKey)), edsmTestRow)
 	inaraTestRow := container.NewBorder(nil, nil, nil, p.inaraTestBtn, p.inaraTestStatus)
-	inaraRow := container.NewVBox(checkboxRow(p.inaraEnabled), formItem("API key", p.inaraKey), inaraTestRow)
+	inaraRow := container.NewVBox(checkboxRow(p.inaraEnabled), formItem("API key", passwordRow(p.inaraKey)), inaraTestRow)
 
 	uploadsCard := section("Community uploads",
 		"Send journal data to third-party trackers. EDDN is anonymous; EDSM and Inara need their own API keys.",
