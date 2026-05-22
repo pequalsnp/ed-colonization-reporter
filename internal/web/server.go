@@ -231,6 +231,12 @@ func (s *Server) LastEventAt() time.Time {
 	return time.Time{}
 }
 
+// ForceFCSync kicks the cAPI /fleetcarrier poller. Honors the 15-min
+// server-side cooldown — if we already polled recently, the next call
+// will silently no-op (cAPI returns ErrFleetCarrierRateLimited which
+// the poller swallows). Exposed for the GUI's "Refresh FC now" button.
+func (s *Server) ForceFCSync() { s.kickFrontierSync() }
+
 // FrontierSignout discards stored tokens.
 func (s *Server) FrontierSignout() error {
 	if err := s.frontierStore.Clear(); err != nil {

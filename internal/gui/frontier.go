@@ -17,9 +17,10 @@ import (
 type frontierPanel struct {
 	srv *web.Server
 
-	status  *canvas.Text
-	signin  *widget.Button
-	signout *widget.Button
+	status      *canvas.Text
+	signin      *widget.Button
+	signout     *widget.Button
+	refreshFC   *widget.Button
 }
 
 func newFrontierPanel(srv *web.Server) *frontierPanel {
@@ -33,13 +34,20 @@ func newFrontierPanel(srv *web.Server) *frontierPanel {
 	p.signout = widget.NewButtonWithIcon("Sign out", theme.LogoutIcon(), func() { go p.doSignout() })
 	p.signout.Importance = widget.LowImportance
 	p.signout.Hide()
+
+	p.refreshFC = widget.NewButtonWithIcon("Refresh FC now", theme.ViewRefreshIcon(), func() {
+		p.srv.ForceFCSync()
+	})
+	p.refreshFC.Importance = widget.MediumImportance
+	p.refreshFC.Hide()
+
 	return p
 }
 
 func (p *frontierPanel) content() fyne.CanvasObject {
 	return container.NewVBox(
 		container.NewPadded(p.status),
-		container.NewHBox(p.signin, p.signout),
+		container.NewHBox(p.signin, p.signout, p.refreshFC),
 	)
 }
 
@@ -72,11 +80,13 @@ func (p *frontierPanel) refresh() {
 			p.status.Color = edStatusOK
 			p.signin.Hide()
 			p.signout.Show()
+			p.refreshFC.Show()
 		} else {
 			p.status.Text = "Not signed in. Click below — a browser tab will open for the Frontier consent screen."
 			p.status.Color = edFgMuted
 			p.signin.Show()
 			p.signout.Hide()
+			p.refreshFC.Hide()
 		}
 		p.status.Refresh()
 	})
