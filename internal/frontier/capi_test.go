@@ -205,6 +205,38 @@ func TestCommodityKey(t *testing.T) {
 	}
 }
 
+// TestFleetCarrier_DecodesMissionPolymorphism pins the case that broke
+// us in production: cAPI returns `"mission": false` on non-mission rows
+// and `"mission": <int>` on mission rows. Since we don't model the
+// field, both must decode cleanly.
+func TestFleetCarrier_DecodesMissionPolymorphism(t *testing.T) {
+	store := &MemoryTokenStore{}
+	_ = store.Save(&Tokens{AccessToken: "AT", ExpiresAt: time.Now().Add(time.Hour)})
+	c, _ := newCAPITest(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{
+			"market_id": 1,
+			"cargo": [
+				{"commodity": "titanium", "qty": 100, "mission": false},
+				{"commodity": "steel",    "qty": 50,  "mission": 9876543210},
+				{"commodity": "gold",     "qty": 1}
+			]
+		}`))
+	}, store)
+	fc, err := c.FleetCarrier(context.Background())
+	if err != nil {
+		t.Fatalf("FleetCarrier: %v", err)
+	}
+	if len(fc.Cargo) != 3 {
+		t.Fatalf("cargo len = %d", len(fc.Cargo))
+	}
+	want := map[string]int{"titanium": 100, "steel": 50, "gold": 1}
+	for _, it := range fc.Cargo {
+		if want[it.Commodity] != it.Quantity {
+			t.Errorf("%s: qty=%d, want %d", it.Commodity, it.Quantity, want[it.Commodity])
+		}
+	}
+}
+
 // TestFleetCarrier_DecodesEmptyCargoArray pins the case where the FC has
 // no cargo — the response has `"cargo": []` and Quantity stays zero.
 func TestFleetCarrier_DecodesEmptyCargoArray(t *testing.T) {

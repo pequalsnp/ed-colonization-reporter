@@ -60,6 +60,11 @@ func NewCAPI(oauth *Client, clientID string, store TokenStore) *CAPI {
 // cargo array. We only model the fields we need; cAPI's full shape is
 // large and we'd rather ignore unknown fields than chase Frontier-side
 // drift.
+//
+// Note: cAPI also returns a `mission` field on each cargo row that is
+// EITHER a mission ID (number) OR boolean false when the cargo isn't
+// mission-tied. We don't use the field for anything, so we don't model
+// it — Go's encoding/json silently ignores keys with no destination.
 type FleetCarrierCargoItem struct {
 	Commodity    string `json:"commodity"`
 	OriginSystem int64  `json:"originSystem,omitempty"`
@@ -67,7 +72,6 @@ type FleetCarrierCargoItem struct {
 	Quantity     int    `json:"qty"`
 	Value        int    `json:"value,omitempty"`
 	LocName      string `json:"locName,omitempty"`
-	MissionID    int64  `json:"mission,omitempty"`
 }
 
 // FleetCarrier is the parsed subset of /fleetcarrier we use. Frontier
