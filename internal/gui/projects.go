@@ -163,8 +163,10 @@ func (p *projectsPanel) rerender() {
 
 // filterProjects applies the case-insensitive search filter to the list,
 // matching against system name and build name. An empty filter returns
-// the input unchanged.
+// the input unchanged. Filter normalisation (lowercase + trim) is done
+// here so callers don't have to remember.
 func filterProjects(rows []ravencolonial.Project, filter string) []ravencolonial.Project {
+	filter = strings.ToLower(strings.TrimSpace(filter))
 	if filter == "" {
 		return rows
 	}
