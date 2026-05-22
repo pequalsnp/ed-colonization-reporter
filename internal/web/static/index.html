@@ -156,7 +156,11 @@
       $('projects-summary').textContent = 'Loading…';
       try {
         const r = await fetch('/api/projects');
-        if (!r.ok) { $('projects-summary').textContent = 'Refresh failed: HTTP ' + r.status; return; }
+        if (!r.ok) {
+          const text = (await r.text()).trim();
+          $('projects-summary').textContent = `Refresh failed: HTTP ${r.status} — ${text || '(no body)'}`;
+          return;
+        }
         const j = await r.json();
         const tbody = document.querySelector('#projects-table tbody');
         tbody.innerHTML = '';

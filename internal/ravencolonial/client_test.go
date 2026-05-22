@@ -185,6 +185,53 @@ func TestAPIError_FormatsStatusAndBody(t *testing.T) {
 	}
 }
 
+func TestActiveProjects_DecodesArrayShapedCommanders(t *testing.T) {
+	// Regression: as of mid-2026 ravencolonial returns `commanders` with
+	// per-commander VALUES as arrays, not objects. We used to model this as
+	// map[string]CommanderEntry which crashed decode with:
+	//   json: cannot unmarshal array into Go struct field Project.commanders
+	// json.RawMessage is permissive — pin that here.
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`[{
+			"buildId": "b1",
+			"buildName": "Belshaw Berth",
+			"commanders": {
+				"EndCancer": ["assigned", "thing1", "thing2"]
+			}
+		}]`))
+	})
+	ps, err := c.ActiveProjects(context.Background(), "EndCancer")
+	if err != nil {
+		t.Fatalf("ActiveProjects: %v", err)
+	}
+	if len(ps) != 1 || ps[0].BuildID != "b1" {
+		t.Fatalf("decoded shape wrong: %+v", ps)
+	}
+	if len(ps[0].Commanders) == 0 {
+		t.Error("Commanders raw bytes should be retained")
+	}
+}
+
+func TestActiveProjects_DecodesObjectShapedCommanders(t *testing.T) {
+	// Same field as the array-shape test, but with the older object shape
+	// some endpoints still use. Both must decode cleanly.
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`[{
+			"buildId": "b1",
+			"commanders": {
+				"EndCancer": {"assigned": {"titanium": 100}}
+			}
+		}]`))
+	})
+	ps, err := c.ActiveProjects(context.Background(), "EndCancer")
+	if err != nil {
+		t.Fatalf("ActiveProjects (object shape): %v", err)
+	}
+	if len(ps) != 1 || ps[0].BuildID != "b1" {
+		t.Errorf("got %+v", ps)
+	}
+}
+
 func TestBaseURL_TrailingSlashTrimmed(t *testing.T) {
 	c := New(WithBaseURL("https://example.com/api/"))
 	if got := c.baseURL; strings.HasSuffix(got, "/") {
