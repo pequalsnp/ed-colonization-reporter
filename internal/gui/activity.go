@@ -30,6 +30,10 @@ type activityPanel struct {
 	paused       bool
 	search       string // lowercased substring filter
 
+	// prefs is set by App.AttachPrefs after construction so toggles
+	// can persist between launches.
+	prefs fyne.Preferences
+
 	list       *widget.List
 	chips      map[reporter.Level]*widget.Button
 	pauseBtn   *widget.Button
@@ -177,10 +181,14 @@ func (p *activityPanel) append(s reporter.Status) {
 func (p *activityPanel) toggleLevel(lvl reporter.Level) {
 	p.mu.Lock()
 	p.levelEnabled[lvl] = !p.levelEnabled[lvl]
+	on := p.levelEnabled[lvl]
 	p.recomputeVisibleLocked()
 	visCount := len(p.visible)
 	totalCount := len(p.entries)
 	p.mu.Unlock()
+	if p.prefs != nil {
+		p.prefs.SetBool(prefKeyForLevel(lvl), on)
+	}
 	fyne.Do(func() {
 		p.applyChipStyles()
 		p.countLbl.Text = fmt.Sprintf("%d / %d entries", visCount, totalCount)
@@ -298,6 +306,26 @@ func (p *activityPanel) applyChipStyles() {
 		}
 		btn.Refresh()
 	}
+}
+
+// AttachPrefs wires Fyne preferences for the activity panel's filter
+// state. The current per-level toggles are restored from prefs and
+// future toggles are written back.
+func (p *activityPanel) AttachPrefs(prefs fyne.Preferences) {
+	p.prefs = prefs
+	p.mu.Lock()
+	for _, lvl := range []reporter.Level{reporter.LevelError, reporter.LevelWarn, reporter.LevelOK, reporter.LevelInfo} {
+		// Default true (chip on) so first launch shows everything.
+		p.levelEnabled[lvl] = prefs.BoolWithFallback(prefKeyForLevel(lvl), true)
+	}
+	p.recomputeVisibleLocked()
+	p.mu.Unlock()
+	// Reflect restored state in the chip visuals.
+	p.applyChipStyles()
+}
+
+func prefKeyForLevel(l reporter.Level) string {
+	return "activity.level." + l.String()
 }
 
 func levelColor(l reporter.Level) color.Color {
