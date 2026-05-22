@@ -3,6 +3,7 @@ package gui
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,6 +36,11 @@ type settingsPanel struct {
 	// journalStatus shows whether the configured (or auto-detected)
 	// journal directory contains any Journal.*.log files.
 	journalStatus *canvas.Text
+
+	// rcTestStatus + rcTestBtn implement the "Test connection" probe
+	// for the ravencolonial API.
+	rcTestStatus *canvas.Text
+	rcTestBtn    *widget.Button
 }
 
 func newSettingsPanel(srv *web.Server) *settingsPanel {
@@ -47,6 +53,10 @@ func newSettingsPanel(srv *web.Server) *settingsPanel {
 	p.journalDir.OnChanged = func(string) { p.updateJournalStatus() }
 
 	p.apiBase = entry(cfg.APIBaseURL, ravencolonial.DefaultBaseURL)
+	p.rcTestStatus = canvas.NewText("", edFgMuted)
+	p.rcTestStatus.TextSize = 11
+	p.rcTestBtn = widget.NewButtonWithIcon("Test connection", theme.ConfirmIcon(), func() { go p.testRavencolonial() })
+	p.rcTestBtn.Importance = widget.LowImportance
 	p.apiKey = passwordEntry(cfg.APIKey, "optional — from ravencolonial.com/user")
 	p.cmdrOverride = entry(cfg.CommanderOverride, "leave blank to use the journal commander")
 
@@ -138,6 +148,48 @@ func countJournalFiles(dir string) int {
 	return len(files)
 }
 
+// testRavencolonial probes the configured API base URL with a known
+// no-auth endpoint and updates the inline status indicator. The probe
+// uses the commander "test" because ravencolonial returns 200 with []
+// for any unknown commander — confirms reachability + URL correctness
+// without needing the user's real commander to be known yet.
+func (p *settingsPanel) testRavencolonial() {
+	base := strings.TrimRight(strings.TrimSpace(p.apiBase.Text), "/")
+	if base == "" {
+		base = ravencolonial.DefaultBaseURL
+	}
+	url := base + "/api/cmdr/test/active"
+
+	fyne.Do(func() {
+		p.rcTestStatus.Text = "Testing…"
+		p.rcTestStatus.Color = edFgMuted
+		p.rcTestStatus.Refresh()
+		p.rcTestBtn.Disable()
+	})
+	defer fyne.Do(func() { p.rcTestBtn.Enable() })
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
+	resp, err := client.Do(req)
+
+	fyne.Do(func() {
+		if err != nil {
+			p.rcTestStatus.Text = "✗ " + err.Error()
+			p.rcTestStatus.Color = edStatusError
+		} else {
+			defer resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				p.rcTestStatus.Text = fmt.Sprintf("✓ %s reachable (HTTP 200)", base)
+				p.rcTestStatus.Color = edStatusOK
+			} else {
+				p.rcTestStatus.Text = fmt.Sprintf("✗ HTTP %d from %s", resp.StatusCode, base)
+				p.rcTestStatus.Color = edStatusError
+			}
+		}
+		p.rcTestStatus.Refresh()
+	})
+}
+
 func entry(initial, placeholder string) *widget.Entry {
 	e := widget.NewEntry()
 	e.SetText(initial)
@@ -164,6 +216,7 @@ func (p *settingsPanel) content(frontier *frontierPanel) fyne.CanvasObject {
 	rcCard := section("ravencolonial.com",
 		"Colonization project tracking. Anonymous; the rcc-key is only needed for Fleet Carrier writes.",
 		formItem("API base URL", p.apiBase),
+		container.NewBorder(nil, nil, nil, p.rcTestBtn, p.rcTestStatus),
 		formItem("rcc-key", p.apiKey),
 	)
 
