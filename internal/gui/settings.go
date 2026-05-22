@@ -36,6 +36,7 @@ type settingsPanel struct {
 	edsmKey, inaraKey                                     *widget.Entry
 	replaySession, eddnEnabled, edsmEnabled, inaraEnabled *widget.Check
 	frontierCAPIEnabled                                   *widget.Check
+	startMinimized                                        *widget.Check
 	save                                                  *widget.Button
 	notice                                                *canvas.Text
 
@@ -73,6 +74,9 @@ func newSettingsPanel(srv *web.Server) *settingsPanel {
 
 	p.replaySession = widget.NewCheck("Replay current journal session on startup", nil)
 	p.replaySession.SetChecked(cfg.ReplaySession)
+
+	p.startMinimized = widget.NewCheck("Start minimized to system tray", nil)
+	p.startMinimized.SetChecked(cfg.StartMinimized)
 
 	p.eddnEnabled = widget.NewCheck("Enable", nil)
 	p.eddnEnabled.SetChecked(cfg.EDDNEnabled)
@@ -449,6 +453,7 @@ func (p *settingsPanel) content(frontier *frontierPanel) fyne.CanvasObject {
 		container.NewPadded(p.journalStatus),
 		formItem("Commander override", p.cmdrOverride),
 		checkboxRow(p.replaySession),
+		checkboxRow(p.startMinimized),
 	)
 
 	rcCard := section("ravencolonial.com",
@@ -496,6 +501,7 @@ func (p *settingsPanel) doSave() {
 		APIKey:              p.apiKey.Text,
 		CommanderOverride:   p.cmdrOverride.Text,
 		ReplaySession:       p.replaySession.Checked,
+		StartMinimized:      p.startMinimized.Checked,
 		EDDNEnabled:         p.eddnEnabled.Checked,
 		EDSMEnabled:         p.edsmEnabled.Checked,
 		EDSMAPIKey:          p.edsmKey.Text,

@@ -41,6 +41,11 @@ type Config struct {
 	// after a restart mid-session so we re-report depot states the game
 	// has already logged. Defaults to false.
 	ReplaySession bool `toml:"replay_session"`
+	// StartMinimized hides the main window on launch. The app still
+	// runs in the system tray; click the tray icon to surface it.
+	// Useful when the app is in autostart and you don't want it to
+	// steal focus during login.
+	StartMinimized bool `toml:"start_minimized"`
 
 	// EDDNEnabled turns on uploads to the EDDN community data network
 	// (https://eddn.edcd.io). Default off so users opt in explicitly.

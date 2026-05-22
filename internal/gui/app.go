@@ -178,6 +178,14 @@ func (a *App) show(ctx context.Context) {
 	go a.destBar.runLoop(subCtx)
 	go a.runUpdateCheck(subCtx)
 
+	if a.srv.Config().StartMinimized {
+		// Start tray-only. The user surfaces the window via the tray
+		// menu's "Show window" entry.
+		a.window.SetContent(root) // ensure content is set before any hide/show
+		// ShowAndRun still drives the event loop; hide right after so
+		// the window never appears.
+		a.window.Hide()
+	}
 	a.window.ShowAndRun()
 }
 
