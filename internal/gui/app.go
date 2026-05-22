@@ -84,6 +84,7 @@ func newApp(srv *web.Server) *App {
 func (a *App) show(ctx context.Context) {
 	a.statusBar = newStatusBar(a.srv.GetVersion())
 	a.projects = newProjectsPanel(a.srv)
+	a.projects.AttachPrefs(a.app.Preferences())
 	a.activity = newActivityPanel()
 	a.settings = newSettingsPanel(a.srv)
 	a.frontierPanel = newFrontierPanel(a.srv)

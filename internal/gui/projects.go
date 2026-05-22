@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -18,6 +19,11 @@ import (
 	"github.com/pequalsnp/ed-colonization-reporter/internal/ravencolonial"
 	"github.com/pequalsnp/ed-colonization-reporter/internal/web"
 )
+
+// stableSort is a thin wrapper so call sites read like a domain operation.
+func stableSort(rows []ravencolonial.Project, less func(i, j int) bool) {
+	sort.SliceStable(rows, less)
+}
 
 // projectsPanel renders one card per active project with a progress bar.
 type projectsPanel struct {
@@ -35,15 +41,22 @@ type projectsPanel struct {
 	search *widget.Entry
 	filter string
 
+	sortSel *widget.Select
+	sortKey string
+
 	summary *canvas.Text
 	refresh *widget.Button
 	cards   *fyne.Container
 	scroll  *container.Scroll
 	empty   *fyne.Container
+
+	// prefs is set by content() once the panel is wired into the App so
+	// sort/filter preferences survive launches.
+	prefs fyne.Preferences
 }
 
 func newProjectsPanel(srv *web.Server) *projectsPanel {
-	p := &projectsPanel{srv: srv, expanded: map[string]bool{}}
+	p := &projectsPanel{srv: srv, expanded: map[string]bool{}, sortKey: sortOutstandingDesc}
 	p.summary = canvas.NewText("Loading…", edFgMuted)
 	p.summary.TextSize = 12
 	p.refresh = widget.NewButtonWithIcon("Refresh", theme.ViewRefreshIcon(), func() { go p.refreshNow() })
@@ -56,6 +69,19 @@ func newProjectsPanel(srv *web.Server) *projectsPanel {
 		p.mu.Unlock()
 		p.rerender()
 	}
+
+	p.sortSel = widget.NewSelect(sortOptions(), func(label string) {
+		p.mu.Lock()
+		p.sortKey = sortKeyForLabel(label)
+		key := p.sortKey
+		p.mu.Unlock()
+		if p.prefs != nil {
+			p.prefs.SetString("projects.sort", key)
+		}
+		p.rerender()
+	})
+	p.sortSel.SetSelected(sortLabelForKey(sortOutstandingDesc))
+
 	p.cards = container.NewVBox()
 	p.scroll = container.NewVScroll(p.cards)
 
@@ -75,7 +101,13 @@ func (p *projectsPanel) content() fyne.CanvasObject {
 	summaryRow := container.NewBorder(nil, nil, p.summary, p.refresh, layout.NewSpacer())
 	// Search icon prefix on the entry so it reads as a filter, not a label.
 	searchPrefix := widget.NewIcon(theme.SearchIcon())
-	searchRow := container.NewBorder(nil, nil, container.NewPadded(searchPrefix), nil, p.search)
+	sortLabel := canvas.NewText("Sort:", edFgMuted)
+	sortLabel.TextSize = 12
+	searchRow := container.NewBorder(nil, nil,
+		container.NewPadded(searchPrefix),
+		container.NewHBox(container.NewPadded(sortLabel), p.sortSel),
+		p.search,
+	)
 	top := container.NewVBox(summaryRow, searchRow)
 	stack := container.NewStack(p.scroll, p.empty)
 	return container.NewBorder(
@@ -83,6 +115,18 @@ func (p *projectsPanel) content() fyne.CanvasObject {
 		nil, nil, nil,
 		stack,
 	)
+}
+
+// AttachPrefs is called by the App once it has access to fyne.Preferences,
+// so the panel can restore its persisted sort choice.
+func (p *projectsPanel) AttachPrefs(prefs fyne.Preferences) {
+	p.prefs = prefs
+	if saved := prefs.StringWithFallback("projects.sort", sortOutstandingDesc); saved != "" {
+		p.mu.Lock()
+		p.sortKey = saved
+		p.mu.Unlock()
+		p.sortSel.SetSelected(sortLabelForKey(saved))
+	}
 }
 
 func (p *projectsPanel) runAutoRefresh(ctx context.Context) {
@@ -124,9 +168,11 @@ func (p *projectsPanel) rerender() {
 	cmdr := p.commander
 	errMsg := p.err
 	filter := p.filter
+	sortKey := p.sortKey
 	p.mu.Unlock()
 
 	filtered := filterProjects(rows, filter)
+	sortProjects(filtered, sortKey)
 
 	fyne.Do(func() {
 		switch {
@@ -159,6 +205,92 @@ func (p *projectsPanel) rerender() {
 		}
 		p.cards.Refresh()
 	})
+}
+
+// Sort keys.
+const (
+	sortOutstandingDesc = "outstanding-desc"
+	sortProgressAsc     = "progress-asc"
+	sortSystemAsc       = "system-asc"
+	sortBuildAsc        = "build-asc"
+)
+
+func sortOptions() []string {
+	return []string{
+		sortLabelForKey(sortOutstandingDesc),
+		sortLabelForKey(sortProgressAsc),
+		sortLabelForKey(sortSystemAsc),
+		sortLabelForKey(sortBuildAsc),
+	}
+}
+
+func sortLabelForKey(k string) string {
+	switch k {
+	case sortOutstandingDesc:
+		return "Outstanding (most first)"
+	case sortProgressAsc:
+		return "Progress (least complete first)"
+	case sortSystemAsc:
+		return "System name (A→Z)"
+	case sortBuildAsc:
+		return "Build name (A→Z)"
+	}
+	return "Outstanding (most first)"
+}
+
+func sortKeyForLabel(label string) string {
+	for _, k := range []string{sortOutstandingDesc, sortProgressAsc, sortSystemAsc, sortBuildAsc} {
+		if sortLabelForKey(k) == label {
+			return k
+		}
+	}
+	return sortOutstandingDesc
+}
+
+// sortProjects sorts in place according to the sort key.
+func sortProjects(rows []ravencolonial.Project, key string) {
+	switch key {
+	case sortProgressAsc:
+		sortStable(rows, func(i, j int) bool {
+			pi := computeProgress(rows[i], totalOutstanding(rows[i].Commodities))
+			pj := computeProgress(rows[j], totalOutstanding(rows[j].Commodities))
+			if pi != pj {
+				return pi < pj
+			}
+			return rows[i].BuildName < rows[j].BuildName
+		})
+	case sortSystemAsc:
+		sortStable(rows, func(i, j int) bool {
+			if rows[i].SystemName != rows[j].SystemName {
+				return rows[i].SystemName < rows[j].SystemName
+			}
+			return rows[i].BuildName < rows[j].BuildName
+		})
+	case sortBuildAsc:
+		sortStable(rows, func(i, j int) bool { return rows[i].BuildName < rows[j].BuildName })
+	default: // sortOutstandingDesc
+		sortStable(rows, func(i, j int) bool {
+			oi := totalOutstanding(rows[i].Commodities)
+			oj := totalOutstanding(rows[j].Commodities)
+			if oi != oj {
+				return oi > oj
+			}
+			return rows[i].BuildName < rows[j].BuildName
+		})
+	}
+}
+
+func totalOutstanding(m map[string]int) int {
+	t := 0
+	for _, v := range m {
+		t += v
+	}
+	return t
+}
+
+// sortStable is sort.SliceStable; wrapped to keep the call site tidy.
+func sortStable(rows []ravencolonial.Project, less func(i, j int) bool) {
+	stableSort(rows, less)
 }
 
 // filterProjects applies the case-insensitive search filter to the list,
