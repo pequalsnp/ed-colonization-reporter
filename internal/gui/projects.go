@@ -3,6 +3,7 @@ package gui
 import (
 	"context"
 	"fmt"
+	"image/color"
 	"net/url"
 	"sort"
 	"strings"
@@ -446,7 +447,13 @@ func (panel *projectsPanel) buildProjectCard(p ravencolonial.Project, expanded b
 	body := container.NewVBox(bar, summary)
 	if outstanding > 0 {
 		if expanded {
-			body.Add(allCommoditiesGrid(p.Commodities))
+			fcName, fcInv, _ := panel.srv.LastFCInventory()
+			if fcName != "" {
+				heading := canvas.NewText(fmt.Sprintf("Against your Fleet Carrier (%s):", fcName), edFgMuted)
+				heading.TextSize = 11
+				body.Add(container.NewPadded(heading))
+			}
+			body.Add(allCommoditiesGrid(p.Commodities, fcInv))
 		} else {
 			body.Add(commoditiesLine(p.Commodities))
 		}
@@ -487,26 +494,82 @@ func (panel *projectsPanel) buildProjectCard(p ravencolonial.Project, expanded b
 }
 
 // allCommoditiesGrid renders every outstanding commodity sorted by
-// quantity desc. Two columns wide so 20+ commodities don't make the
-// card absurdly tall.
-func allCommoditiesGrid(commodities map[string]int) fyne.CanvasObject {
-	entries := topCommodities(commodities, 1000) // effectively "all"
+// need-quantity desc, with columns: Need · FC · Diff · Name. The FC
+// columns are omitted when fcInventory is nil (cAPI not signed in or
+// never fetched). Two grid columns wide so 20+ commodities don't make
+// the card absurdly tall.
+func allCommoditiesGrid(commodities map[string]int, fcInventory map[string]int) fyne.CanvasObject {
+	entries := topCommodities(commodities, 1000)
 	if len(entries) == 0 {
 		return container.NewWithoutLayout()
 	}
+
 	rows := container.New(layout.NewGridLayout(2))
+	header := commoditiesHeader(fcInventory != nil)
+	rows.Add(header)
+	// Add an empty cell so the header doesn't push the first commodity
+	// into the right column.
+	rows.Add(commoditiesHeader(fcInventory != nil))
+
 	for _, c := range entries {
-		qty := canvas.NewText(fmt.Sprintf("%s", humanCount(c.Count)), edFg)
-		qty.TextSize = 12
-		qty.TextStyle = fyne.TextStyle{Bold: true, Monospace: true}
-		name := canvas.NewText(PrettifyCommodity(c.Symbol), edFgMuted)
-		name.TextSize = 12
-		// Use a fixed-width container for the qty column so names line up.
-		qtyCell := container.NewGridWrap(fyne.NewSize(64, 18), qty)
-		row := container.NewHBox(qtyCell, name)
-		rows.Add(row)
+		rows.Add(commodityRow(c, fcInventory))
 	}
 	return rows
+}
+
+func commoditiesHeader(showFC bool) fyne.CanvasObject {
+	header := func(text string) *canvas.Text {
+		t := canvas.NewText(text, edFgDim)
+		t.TextSize = 10
+		t.TextStyle = fyne.TextStyle{Bold: true, Monospace: true}
+		return t
+	}
+	need := container.NewGridWrap(fyne.NewSize(56, 14), header("NEED"))
+	if !showFC {
+		return container.NewHBox(need, header("COMMODITY"))
+	}
+	fc := container.NewGridWrap(fyne.NewSize(56, 14), header("FC"))
+	diff := container.NewGridWrap(fyne.NewSize(56, 14), header("DIFF"))
+	return container.NewHBox(need, fc, diff, header("COMMODITY"))
+}
+
+func commodityRow(c commodityEntry, fcInventory map[string]int) fyne.CanvasObject {
+	cellNum := func(value string, fg color.Color) fyne.CanvasObject {
+		t := canvas.NewText(value, fg)
+		t.TextSize = 12
+		t.TextStyle = fyne.TextStyle{Bold: true, Monospace: true}
+		t.Alignment = fyne.TextAlignLeading
+		return container.NewGridWrap(fyne.NewSize(56, 18), t)
+	}
+
+	need := cellNum(humanCount(c.Count), edFg)
+	name := canvas.NewText(PrettifyCommodity(c.Symbol), edFgMuted)
+	name.TextSize = 12
+
+	if fcInventory == nil {
+		return container.NewHBox(need, name)
+	}
+	fcQty, hasFC := fcInventory[c.Symbol]
+	fcCell := cellNum("—", edFgDim)
+	diffCell := cellNum("—", edFgDim)
+	if hasFC {
+		fcCell = cellNum(humanCount(fcQty), edFg)
+		// Diff = FC - Need. Negative means deficit (red), positive surplus (green).
+		delta := fcQty - c.Count
+		if delta < 0 {
+			diffCell = cellNum("-"+humanCount(-delta), edStatusError)
+		} else {
+			diffCell = cellNum("+"+humanCount(delta), edStatusOK)
+		}
+	}
+	return container.NewHBox(need, fcCell, diffCell, name)
+}
+
+func absInt(n int) int {
+	if n < 0 {
+		return -n
+	}
+	return n
 }
 
 // countOutstanding returns how many commodities have outstanding > 0.

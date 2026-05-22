@@ -70,6 +70,14 @@ type Server struct {
 	// file. The GUI uses it to decide whether to show a welcome dialog.
 	firstRun bool
 
+	// fcInventory caches the most recent cAPI /fleetcarrier cargo snapshot
+	// as {commodity_symbol: qty}. Updated by runFrontierCAPISync; read
+	// by the GUI's Projects panel for the FC column.
+	fcInventory      ravencolonial.Cargo
+	fcInventoryName  string
+	fcInventoryAt    time.Time
+	fcInventoryMu    sync.RWMutex
+
 	hub      *statusHub
 	listener net.Listener
 	srv      *http.Server
@@ -257,6 +265,37 @@ func (s *Server) LastEventAt() time.Time {
 		return time.Unix(0, v)
 	}
 	return time.Time{}
+}
+
+// SetFCInventory is called by the cAPI sync goroutine after a successful
+// /fleetcarrier fetch. Stores the per-commodity totals + carrier name
+// for the GUI's Projects panel to read.
+func (s *Server) SetFCInventory(name string, cargo ravencolonial.Cargo) {
+	s.fcInventoryMu.Lock()
+	defer s.fcInventoryMu.Unlock()
+	cp := make(ravencolonial.Cargo, len(cargo))
+	for k, v := range cargo {
+		cp[k] = v
+	}
+	s.fcInventory = cp
+	s.fcInventoryName = name
+	s.fcInventoryAt = time.Now()
+}
+
+// LastFCInventory returns a copy of the most recent FC inventory plus
+// the carrier name and fetch time. Returns nil cargo when nothing has
+// been cached yet (e.g. cAPI not signed in).
+func (s *Server) LastFCInventory() (name string, cargo ravencolonial.Cargo, at time.Time) {
+	s.fcInventoryMu.RLock()
+	defer s.fcInventoryMu.RUnlock()
+	if s.fcInventory == nil {
+		return "", nil, time.Time{}
+	}
+	cp := make(ravencolonial.Cargo, len(s.fcInventory))
+	for k, v := range s.fcInventory {
+		cp[k] = v
+	}
+	return s.fcInventoryName, cp, s.fcInventoryAt
 }
 
 // ForceFCSync kicks the cAPI /fleetcarrier poller. Honors the 15-min

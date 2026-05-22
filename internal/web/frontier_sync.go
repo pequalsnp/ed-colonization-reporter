@@ -115,6 +115,10 @@ func (s *Server) pollFleetCarrier(ctx context.Context) {
 		cargo[key] += item.Quantity
 	}
 
+	// Cache the snapshot before we send it so the GUI can render it even
+	// if ravencolonial is down or the user has no rcc-key set.
+	s.SetFCInventory(fc.Name.Filtered, cargo)
+
 	if err := s.client.OverwriteCarrierCargo(ctx, fc.MarketID, cargo); err != nil {
 		if errors.Is(err, ravencolonial.ErrNoAPIKey) {
 			s.hub.Publish(reporter.Status{
