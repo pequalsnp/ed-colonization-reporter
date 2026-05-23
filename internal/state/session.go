@@ -1,7 +1,10 @@
 // Package state holds the in-memory session state derived from journal events.
 package state
 
-import "sync"
+import (
+	"sync"
+	"time"
+)
 
 // Session captures everything we know about the current Elite Dangerous play
 // session: who is playing, where they are, and which construction-site build
@@ -32,6 +35,15 @@ type Session struct {
 	// ownedCarriers tracks Fleet Carriers the commander owns. The presence
 	// of an entry is the source of truth that "this MarketID is my FC".
 	ownedCarriers map[int64]OwnedCarrier
+
+	// fcCargo is the per-carrier cargo snapshot the GUI reads for the
+	// "FC" column on project cards. Seeded by cAPI polls and Market.json
+	// reads; updated incrementally by CargoTransfer and MarketBuy/Sell
+	// events so the local view doesn't stall for 15 min between cAPI
+	// polls. Keyed by MarketID.
+	fcCargo map[int64]map[string]int
+	// fcCargoAt records when each MarketID's cargo was last touched.
+	fcCargoAt map[int64]time.Time
 }
 
 // OwnedCarrier is the minimal record we need about a commander's FC to sync it.
@@ -48,6 +60,8 @@ func New() *Session {
 	return &Session{
 		buildByMarket: map[int64]string{},
 		ownedCarriers: map[int64]OwnedCarrier{},
+		fcCargo:       map[int64]map[string]int{},
+		fcCargoAt:     map[int64]time.Time{},
 	}
 }
 
@@ -235,6 +249,104 @@ func (s *Session) OwnedCarrier(marketID int64) (OwnedCarrier, bool) {
 	defer s.mu.RUnlock()
 	c, ok := s.ownedCarriers[marketID]
 	return c, ok
+}
+
+// OwnedCarriers returns a snapshot slice of every owned carrier record.
+func (s *Session) OwnedCarriers() []OwnedCarrier {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]OwnedCarrier, 0, len(s.ownedCarriers))
+	for _, c := range s.ownedCarriers {
+		out = append(out, c)
+	}
+	return out
+}
+
+// SetFCCargo overwrites the cached cargo for a given MarketID. Used
+// after a full snapshot (cAPI poll, Market.json read).
+func (s *Session) SetFCCargo(marketID int64, cargo map[string]int) {
+	if marketID == 0 {
+		return
+	}
+	cp := make(map[string]int, len(cargo))
+	for k, v := range cargo {
+		if v > 0 {
+			cp[k] = v
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.fcCargo[marketID] = cp
+	s.fcCargoAt[marketID] = time.Now()
+}
+
+// ApplyFCCargoDelta adds a signed delta to the cached FC cargo. Used
+// after a CargoTransfer or MarketBuy/Sell event so the GUI reflects
+// the change immediately rather than waiting for the next cAPI poll.
+// Entries that hit 0 or below are pruned.
+func (s *Session) ApplyFCCargoDelta(marketID int64, delta map[string]int) {
+	if marketID == 0 || len(delta) == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cur := s.fcCargo[marketID]
+	if cur == nil {
+		cur = map[string]int{}
+		s.fcCargo[marketID] = cur
+	}
+	for k, d := range delta {
+		cur[k] += d
+		if cur[k] <= 0 {
+			delete(cur, k)
+		}
+	}
+	s.fcCargoAt[marketID] = time.Now()
+}
+
+// FCCargo returns a copy of the cached cargo for a given MarketID.
+// Returns (nil, false) if nothing is cached.
+func (s *Session) FCCargo(marketID int64) (map[string]int, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	c, ok := s.fcCargo[marketID]
+	if !ok {
+		return nil, false
+	}
+	cp := make(map[string]int, len(c))
+	for k, v := range c {
+		cp[k] = v
+	}
+	return cp, true
+}
+
+// FCCargoAggregate returns a single {commodity: qty} map summed across
+// every owned carrier's cached cargo, plus the most recent owned
+// carrier's name. Used by the GUI when surfacing the "FC" column on
+// projects — it doesn't currently distinguish which FC the stock is on.
+func (s *Session) FCCargoAggregate() (name string, cargo map[string]int, at time.Time) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	cargo = map[string]int{}
+	var latest time.Time
+	var latestName string
+	for mid := range s.ownedCarriers {
+		for k, v := range s.fcCargo[mid] {
+			cargo[k] += v
+		}
+		if t := s.fcCargoAt[mid]; t.After(latest) {
+			latest = t
+			c := s.ownedCarriers[mid]
+			latestName = c.Name
+			if latestName == "" {
+				latestName = c.Callsign
+			}
+		}
+	}
+	if len(cargo) == 0 {
+		return "", nil, time.Time{}
+	}
+	return latestName, cargo, latest
 }
 
 // Snapshot returns a copy of the session's user-visible fields. Useful for

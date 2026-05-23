@@ -369,11 +369,13 @@ func (r *Reporter) handleFCMarketDelta(ctx context.Context, marketID int64, type
 	delta := ravencolonial.Cargo{key: count}
 	if err := r.API.PatchCarrierCargo(ctx, marketID, delta); err != nil {
 		if errors.Is(err, ravencolonial.ErrNoAPIKey) {
+			r.Session.ApplyFCCargoDelta(marketID, mapStringInt(delta))
 			return nil
 		}
 		r.emit(LevelError, "FC market %s delta failed: %v", op, err)
 		return err
 	}
+	r.Session.ApplyFCCargoDelta(marketID, mapStringInt(delta))
 	r.emit(LevelOK, "FC market %s posted (%s %+d)", op, key, count)
 	return nil
 }
@@ -413,13 +415,28 @@ func (r *Reporter) handleCargoTransfer(ctx context.Context, e journal.CargoTrans
 	}
 	if err := r.API.PatchCarrierCargo(ctx, marketID, delta); err != nil {
 		if errors.Is(err, ravencolonial.ErrNoAPIKey) {
+			// Even without an rcc-key for ravencolonial, the user can
+			// see the local FC view in the GUI — apply the delta there.
+			r.Session.ApplyFCCargoDelta(marketID, mapStringInt(delta))
 			return nil
 		}
 		r.emit(LevelError, "FC cargo delta failed: %v", err)
 		return err
 	}
+	r.Session.ApplyFCCargoDelta(marketID, mapStringInt(delta))
 	r.emit(LevelOK, "FC cargo delta posted (%d commodity changes)", len(delta))
 	return nil
+}
+
+// mapStringInt converts a ravencolonial.Cargo (typedef of map[string]int)
+// back to the bare map type the state package speaks. Cheap conversion;
+// keeps state from depending on ravencolonial.
+func mapStringInt(c ravencolonial.Cargo) map[string]int {
+	out := make(map[string]int, len(c))
+	for k, v := range c {
+		out[k] = v
+	}
+	return out
 }
 
 func (r *Reporter) handleCarrierStats(ctx context.Context, e journal.CarrierStatsEvent) error {
@@ -485,6 +502,9 @@ func (r *Reporter) handleMarket(ctx context.Context, e journal.MarketEvent) erro
 		return nil
 	}
 	cargo := cargoFromMarket(mf)
+	// Even when ravencolonial rejects (or is unauthenticated), keep the
+	// local cache up to date so the GUI's FC column is meaningful.
+	r.Session.SetFCCargo(e.MarketID, mapStringInt(cargo))
 	if err := r.API.OverwriteCarrierCargo(ctx, e.MarketID, cargo); err != nil {
 		if errors.Is(err, ravencolonial.ErrNoAPIKey) {
 			return nil

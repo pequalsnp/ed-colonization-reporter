@@ -74,13 +74,10 @@ type Server struct {
 	// reading. Optional; nil if open failed.
 	activityLog *activityFileLogger
 
-	// fcInventory caches the most recent cAPI /fleetcarrier cargo snapshot
-	// as {commodity_symbol: qty}. Updated by runFrontierCAPISync; read
-	// by the GUI's Projects panel for the FC column.
-	fcInventory      ravencolonial.Cargo
-	fcInventoryName  string
-	fcInventoryAt    time.Time
-	fcInventoryMu    sync.RWMutex
+	// FC inventory cache now lives in state.Session so reporter-side
+	// delta updates (CargoTransfer, MarketBuy/Sell) and the cAPI poll
+	// share storage. See Session.{SetFCCargo,ApplyFCCargoDelta,
+	// FCCargoAggregate}.
 
 	hub      *statusHub
 	listener net.Listener
@@ -295,34 +292,34 @@ func (s *Server) LastEventAt() time.Time {
 }
 
 // SetFCInventory is called by the cAPI sync goroutine after a successful
-// /fleetcarrier fetch. Stores the per-commodity totals + carrier name
-// for the GUI's Projects panel to read.
+// /fleetcarrier fetch. We need to find the MarketID for the named
+// carrier; in practice we have exactly one owned FC so this loop is
+// O(1). The actual storage lives in state.Session so reporter-driven
+// CargoTransfer / MarketBuy deltas can update the same cache.
 func (s *Server) SetFCInventory(name string, cargo ravencolonial.Cargo) {
-	s.fcInventoryMu.Lock()
-	defer s.fcInventoryMu.Unlock()
-	cp := make(ravencolonial.Cargo, len(cargo))
-	for k, v := range cargo {
-		cp[k] = v
+	// Locate which owned MarketID this snapshot belongs to.
+	for _, c := range s.session.OwnedCarriers() {
+		if c.Name == name || c.Callsign == name {
+			s.session.SetFCCargo(c.MarketID, cargo)
+			return
+		}
 	}
-	s.fcInventory = cp
-	s.fcInventoryName = name
-	s.fcInventoryAt = time.Now()
 }
 
-// LastFCInventory returns a copy of the most recent FC inventory plus
-// the carrier name and fetch time. Returns nil cargo when nothing has
-// been cached yet (e.g. cAPI not signed in).
+// LastFCInventory returns the aggregated cargo across all owned FCs
+// (in practice: the single one) plus the most-recent carrier name and
+// update time. Reads from state.Session, so callers see deltas applied
+// between cAPI polls.
 func (s *Server) LastFCInventory() (name string, cargo ravencolonial.Cargo, at time.Time) {
-	s.fcInventoryMu.RLock()
-	defer s.fcInventoryMu.RUnlock()
-	if s.fcInventory == nil {
+	n, c, t := s.session.FCCargoAggregate()
+	if c == nil {
 		return "", nil, time.Time{}
 	}
-	cp := make(ravencolonial.Cargo, len(s.fcInventory))
-	for k, v := range s.fcInventory {
-		cp[k] = v
+	out := make(ravencolonial.Cargo, len(c))
+	for k, v := range c {
+		out[k] = v
 	}
-	return s.fcInventoryName, cp, s.fcInventoryAt
+	return n, out, t
 }
 
 // ForceFCSync kicks the cAPI /fleetcarrier poller. Honors the 15-min
