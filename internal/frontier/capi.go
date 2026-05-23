@@ -2,6 +2,7 @@ package frontier
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -84,10 +85,20 @@ type FleetCarrierCargoItem struct {
 // snake_case and camelCase across endpoints and patches. We accept
 // whichever shape shows up via custom UnmarshalJSON. RawBody is kept so
 // callers can dump it for diagnostics when the parse comes up empty.
+//
+// Name handling: cAPI returns both `vanityName` and `filteredVanityName`
+// **hex-encoded** (per the FDev cAPI spec — EDDI's
+// DataDefinitions/FleetCarrier.cs decodes the same way). The Filtered
+// field on this struct is hex-decoded in UnmarshalJSON so callers see
+// the readable string ("LANDMINES4DEMOCRACY", not
+// "4c414e444d494e45533444454d4f4352414359"). FilteredRaw keeps the
+// pre-decoded form for diagnostics.
 type FleetCarrier struct {
 	Name struct {
-		Filtered string `json:"filteredVanityName"`
-		Callsign string `json:"callsign"`
+		Filtered    string `json:"-"`
+		FilteredRaw string `json:"filteredVanityName"`
+		VanityRaw   string `json:"vanityName"`
+		Callsign    string `json:"callsign"`
 	} `json:"name"`
 	MarketID          int64                   `json:"-"`
 	CurrentStarSystem string                  `json:"currentStarSystem"`
@@ -131,6 +142,18 @@ func (fc *FleetCarrier) UnmarshalJSON(data []byte) error {
 		case probe.IDPlain != 0:
 			fc.MarketID = probe.IDPlain
 		}
+	}
+
+	// Hex-decode the vanity name. Filtered is preferred (FDev's
+	// obscenity-filtered form); fall back to the raw vanity name if the
+	// filter dropped the field; finally fall back to the callsign so
+	// callers always get *something* readable.
+	if s := decodeHexName(fc.Name.FilteredRaw); s != "" {
+		fc.Name.Filtered = s
+	} else if s := decodeHexName(fc.Name.VanityRaw); s != "" {
+		fc.Name.Filtered = s
+	} else {
+		fc.Name.Filtered = fc.Name.Callsign
 	}
 	return nil
 }
@@ -203,6 +226,23 @@ func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
 // ErrFleetCarrierRateLimited is returned when a /fleetcarrier call would
 // have violated the documented 15-minute cooldown.
 var ErrFleetCarrierRateLimited = errors.New("frontier capi: /fleetcarrier cooldown active (15 min)")
+
+// decodeHexName takes the cAPI hex-encoded vanity name and returns the
+// readable string. Empty input → empty output; malformed hex → empty
+// (caller can fall back to a different field). Non-ASCII byte sequences
+// after decoding are returned as-is — Frontier allows the carrier name
+// to contain UTF-8 multi-byte characters.
+func decodeHexName(hexStr string) string {
+	hexStr = strings.TrimSpace(hexStr)
+	if hexStr == "" || len(hexStr)%2 != 0 {
+		return ""
+	}
+	b, err := hex.DecodeString(hexStr)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
+}
 
 // get performs a Bearer-authenticated GET to host+path with one retry
 // after refreshing tokens on a 401.
