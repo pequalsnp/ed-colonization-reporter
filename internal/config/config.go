@@ -70,6 +70,13 @@ type Config struct {
 	// (https://inara.cz). API key from https://inara.cz/settings-api/.
 	InaraEnabled bool   `toml:"inara_enabled"`
 	InaraAPIKey  string `toml:"inara_api_key"`
+	// InaraAppName overrides the appName sent in the Inara API header.
+	// Inara whitelists apps by name — until edcolreport is registered
+	// there, uploads from the shipped default name will be rejected
+	// with "this application has no access allowed". Users with their
+	// own Inara dev relationship can set their registered app name here.
+	// Empty defaults to the shipped value.
+	InaraAppName string `toml:"inara_app_name"`
 
 	// FrontierClientID overrides the shipped default OAuth client_id —
 	// useful if Frontier ever revokes the default. Leave empty to use

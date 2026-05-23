@@ -412,7 +412,11 @@ func (s *Server) initSessionAndReporter() error {
 	s.edsm.SetAPIKey(s.cfg.EDSMAPIKey)
 	s.edsm.SetEnabled(s.cfg.EDSMEnabled)
 
-	s.inara = inara.New(inara.SoftwareID{Name: "edcolreport", Version: s.Version}, s.session)
+	inaraName := s.cfg.InaraAppName
+	if inaraName == "" {
+		inaraName = "edcolreport"
+	}
+	s.inara = inara.New(inara.SoftwareID{Name: inaraName, Version: s.Version}, s.session)
 	s.inara.OnStatus = statusBridge
 	s.inara.SetAPIKey(s.cfg.InaraAPIKey)
 	s.inara.SetEnabled(s.cfg.InaraEnabled)

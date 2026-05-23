@@ -35,6 +35,7 @@ type settingsPanel struct {
 
 	journalDir, apiBase, apiKey, cmdrOverride             *widget.Entry
 	edsmKey, inaraKey                                     *widget.Entry
+	inaraAppName                                          *widget.Entry
 	replaySession, eddnEnabled, edsmEnabled, inaraEnabled *widget.Check
 	frontierCAPIEnabled                                   *widget.Check
 	startMinimized                                        *widget.Check
@@ -97,6 +98,7 @@ func newSettingsPanel(srv *web.Server) *settingsPanel {
 	p.inaraEnabled = widget.NewCheck("Enable", nil)
 	p.inaraEnabled.SetChecked(cfg.InaraEnabled)
 	p.inaraKey = passwordEntry(cfg.InaraAPIKey, "from inara.cz/settings-api/")
+	p.inaraAppName = entry(cfg.InaraAppName, "edcolreport (Inara whitelist required)")
 
 	p.edsmTestStatus = canvas.NewText("", edFgMuted)
 	p.edsmTestStatus.TextSize = 11
@@ -302,9 +304,13 @@ func (p *settingsPanel) testInara() {
 		return
 	}
 
+	appName := strings.TrimSpace(p.inaraAppName.Text)
+	if appName == "" {
+		appName = "edcolreport"
+	}
 	payload := map[string]any{
 		"header": map[string]any{
-			"appName":       "edcolreport",
+			"appName":       appName,
 			"appVersion":    p.srv.GetVersion(),
 			"APIkey":        apiKey,
 			"commanderName": cmdr,
@@ -339,6 +345,11 @@ func (p *settingsPanel) testInara() {
 		case reply.Header.EventStatus == 200:
 			p.inaraTestStatus.Text = "✓ Inara accepted the key."
 			p.inaraTestStatus.Color = edStatusOK
+		case reply.Header.EventStatus == 400 && strings.Contains(strings.ToLower(reply.Header.EventStatusText), "no access"):
+			p.inaraTestStatus.Text = "✗ Inara rejected the appName, not the key. " +
+				"The shipped 'edcolreport' name isn't whitelisted yet — see inara.cz/inara-api-docs/ " +
+				"to register, or set a registered name in App name above."
+			p.inaraTestStatus.Color = edStatusError
 		case reply.Header.EventStatus != 0:
 			p.inaraTestStatus.Text = fmt.Sprintf("✗ Inara rejected the key (%d: %s)",
 				reply.Header.EventStatus, reply.Header.EventStatusText)
@@ -479,7 +490,15 @@ func (p *settingsPanel) content(frontier *frontierPanel) fyne.CanvasObject {
 	edsmTestRow := container.NewBorder(nil, nil, nil, p.edsmTestBtn, p.edsmTestStatus)
 	edsmRow := container.NewVBox(checkboxRow(p.edsmEnabled), formItem("API key", passwordRow(p.edsmKey)), edsmTestRow)
 	inaraTestRow := container.NewBorder(nil, nil, nil, p.inaraTestBtn, p.inaraTestStatus)
-	inaraRow := container.NewVBox(checkboxRow(p.inaraEnabled), formItem("API key", passwordRow(p.inaraKey)), inaraTestRow)
+	inaraNote := canvas.NewText("Inara whitelists apps by name — leave blank unless you have your own registered appName.", edFgDim)
+	inaraNote.TextSize = 11
+	inaraRow := container.NewVBox(
+		checkboxRow(p.inaraEnabled),
+		formItem("API key", passwordRow(p.inaraKey)),
+		formItem("App name", p.inaraAppName),
+		container.NewPadded(inaraNote),
+		inaraTestRow,
+	)
 
 	uploadsCard := section("Community uploads",
 		"Send journal data to third-party trackers. EDDN is anonymous; EDSM and Inara need their own API keys.",
@@ -521,6 +540,7 @@ func (p *settingsPanel) doSave() {
 		EDSMAPIKey:          p.edsmKey.Text,
 		InaraEnabled:        p.inaraEnabled.Checked,
 		InaraAPIKey:         p.inaraKey.Text,
+		InaraAppName:        strings.TrimSpace(p.inaraAppName.Text),
 		FrontierCAPIEnabled: p.frontierCAPIEnabled.Checked,
 	}
 	go func() {
