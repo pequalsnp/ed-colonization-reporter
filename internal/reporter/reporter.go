@@ -244,39 +244,30 @@ func (r *Reporter) HandleEvent(ctx context.Context, raw journal.Raw) error {
 		}
 		return r.handleBeaconDeployed(ctx, e)
 	case journal.EventCargoTransfer:
-		if raw.Replayed {
-			// Skipping replayed cargo transfers: PatchCarrierCargo applies
-			// a server-side delta. Re-firing on every backfill multiplies
-			// FC cargo on ravencolonial by the number of restarts.
-			return nil
-		}
 		var e journal.CargoTransferEvent
 		if err := json.Unmarshal(raw.Payload, &e); err != nil {
 			return fmt.Errorf("cargotransfer: %w", err)
 		}
-		return r.handleCargoTransfer(ctx, e)
+		// Replayed events still need to update the local FC cache so
+		// that journal-derived state catches up to deltas cAPI's stale
+		// snapshot missed. The network PATCH is gated inside the handler.
+		return r.handleCargoTransfer(ctx, e, raw.Replayed)
 	case journal.EventMarketBuy:
-		if raw.Replayed {
-			return nil // same accumulation rationale as CargoTransfer
-		}
 		var e journal.MarketBuyEvent
 		if err := json.Unmarshal(raw.Payload, &e); err != nil {
 			return fmt.Errorf("marketbuy: %w", err)
 		}
 		// Buying from a market: cargo leaves the station. If it's our FC,
 		// that's a negative delta against our FC stock.
-		return r.handleFCMarketDelta(ctx, e.MarketID, e.Type, e.TypeLocalised, -e.Count, "buy")
+		return r.handleFCMarketDelta(ctx, e.MarketID, e.Type, e.TypeLocalised, -e.Count, "buy", e.Timestamp, raw.Replayed)
 	case journal.EventMarketSell:
-		if raw.Replayed {
-			return nil
-		}
 		var e journal.MarketSellEvent
 		if err := json.Unmarshal(raw.Payload, &e); err != nil {
 			return fmt.Errorf("marketsell: %w", err)
 		}
 		// Selling to a market: cargo arrives at the station. If it's our
 		// FC, that's a positive delta.
-		return r.handleFCMarketDelta(ctx, e.MarketID, e.Type, e.TypeLocalised, +e.Count, "sell")
+		return r.handleFCMarketDelta(ctx, e.MarketID, e.Type, e.TypeLocalised, +e.Count, "sell", e.Timestamp, raw.Replayed)
 	}
 	return nil
 }
@@ -352,7 +343,7 @@ func (r *Reporter) handleBeaconDeployed(ctx context.Context, e journal.Colonisat
 // commander-owned FC into a delta PATCH against ravencolonial's FC
 // cargo. Transactions at other stations are ignored. Count is signed:
 // negative for buys (cargo leaves the FC), positive for sells.
-func (r *Reporter) handleFCMarketDelta(ctx context.Context, marketID int64, typeSym, typeLocal string, count int, op string) error {
+func (r *Reporter) handleFCMarketDelta(ctx context.Context, marketID int64, typeSym, typeLocal string, count int, op string, eventAt time.Time, replayed bool) error {
 	if marketID == 0 || count == 0 {
 		return nil
 	}
@@ -367,15 +358,19 @@ func (r *Reporter) handleFCMarketDelta(ctx context.Context, marketID int64, type
 		return nil
 	}
 	delta := ravencolonial.Cargo{key: count}
+	if replayed {
+		r.Session.ApplyFCCargoDelta(marketID, mapStringInt(delta), eventAt)
+		return nil
+	}
 	if err := r.API.PatchCarrierCargo(ctx, marketID, delta); err != nil {
 		if errors.Is(err, ravencolonial.ErrNoAPIKey) {
-			r.Session.ApplyFCCargoDelta(marketID, mapStringInt(delta))
+			r.Session.ApplyFCCargoDelta(marketID, mapStringInt(delta), eventAt)
 			return nil
 		}
 		r.emit(LevelError, "FC market %s delta failed: %v", op, err)
 		return err
 	}
-	r.Session.ApplyFCCargoDelta(marketID, mapStringInt(delta))
+	r.Session.ApplyFCCargoDelta(marketID, mapStringInt(delta), eventAt)
 	r.emit(LevelOK, "FC market %s posted (%s %+d)", op, key, count)
 	return nil
 }
@@ -384,7 +379,13 @@ func (r *Reporter) handleFCMarketDelta(ctx context.Context, marketID int64, type
 // delta PATCH to ravencolonial. The journal does not say which carrier
 // the player is at, so we infer from the current dock — and only PATCH
 // when that's one of the commander's own FCs.
-func (r *Reporter) handleCargoTransfer(ctx context.Context, e journal.CargoTransferEvent) error {
+//
+// When replayed=true (backfill), we still apply the delta to the local
+// cache (gated by Session.ApplyFCCargoDelta's timestamp watermark, which
+// rejects events already in the cAPI baseline) but skip the network
+// PATCH — re-firing PATCHes during backfill would multiply the
+// server-side cargo count by the number of restarts.
+func (r *Reporter) handleCargoTransfer(ctx context.Context, e journal.CargoTransferEvent, replayed bool) error {
 	_, _, marketID := r.Session.Dock()
 	if marketID == 0 || !r.Session.IsOwnedCarrier(marketID) {
 		return nil // not at our FC; transfers between ship/SRV don't affect FC state
@@ -413,17 +414,23 @@ func (r *Reporter) handleCargoTransfer(ctx context.Context, e journal.CargoTrans
 	if len(delta) == 0 {
 		return nil
 	}
+	if replayed {
+		// Local cache only — see Session.ApplyFCCargoDelta for the
+		// timestamp watermark that decides whether to apply or skip.
+		r.Session.ApplyFCCargoDelta(marketID, mapStringInt(delta), e.Timestamp)
+		return nil
+	}
 	if err := r.API.PatchCarrierCargo(ctx, marketID, delta); err != nil {
 		if errors.Is(err, ravencolonial.ErrNoAPIKey) {
 			// Even without an rcc-key for ravencolonial, the user can
 			// see the local FC view in the GUI — apply the delta there.
-			r.Session.ApplyFCCargoDelta(marketID, mapStringInt(delta))
+			r.Session.ApplyFCCargoDelta(marketID, mapStringInt(delta), e.Timestamp)
 			return nil
 		}
 		r.emit(LevelError, "FC cargo delta failed: %v", err)
 		return err
 	}
-	r.Session.ApplyFCCargoDelta(marketID, mapStringInt(delta))
+	r.Session.ApplyFCCargoDelta(marketID, mapStringInt(delta), e.Timestamp)
 	r.emit(LevelOK, "FC cargo delta posted (%d commodity changes)", len(delta))
 	return nil
 }
@@ -448,6 +455,11 @@ func (r *Reporter) handleCarrierStats(ctx context.Context, e journal.CarrierStat
 		Name:     e.Name,
 		Callsign: e.Callsign,
 	})
+	// Record the timestamp so cAPI sync can anchor its baseline: cAPI's
+	// /fleetcarrier response is empirically aligned with the most recent
+	// CarrierStats event, so deltas older than this watermark are
+	// already in cAPI's snapshot.
+	r.Session.NoteCarrierStats(e.CarrierID, e.Timestamp)
 	c, _ := r.Session.OwnedCarrier(e.CarrierID)
 	// Ravencolonial's field semantics are inverted from how we name
 	// things internally: server `name` = callsign, `displayName` =
@@ -504,7 +516,9 @@ func (r *Reporter) handleMarket(ctx context.Context, e journal.MarketEvent) erro
 	cargo := cargoFromMarket(mf)
 	// Even when ravencolonial rejects (or is unauthenticated), keep the
 	// local cache up to date so the GUI's FC column is meaningful.
-	r.Session.SetFCCargo(e.MarketID, mapStringInt(cargo))
+	// Market.json is a live snapshot — stamp it with the event's
+	// timestamp so subsequent deltas only apply if they're newer.
+	r.Session.SetFCCargo(e.MarketID, mapStringInt(cargo), e.Timestamp)
 	if err := r.API.OverwriteCarrierCargo(ctx, e.MarketID, cargo); err != nil {
 		if errors.Is(err, ravencolonial.ErrNoAPIKey) {
 			return nil

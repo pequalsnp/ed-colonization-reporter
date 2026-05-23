@@ -292,15 +292,17 @@ func (s *Server) LastEventAt() time.Time {
 }
 
 // SetFCInventory is called by the cAPI sync goroutine after a successful
-// /fleetcarrier fetch. We need to find the MarketID for the named
-// carrier; in practice we have exactly one owned FC so this loop is
-// O(1). The actual storage lives in state.Session so reporter-driven
-// CargoTransfer / MarketBuy deltas can update the same cache.
+// /fleetcarrier fetch. The snapshot is anchored to the most recent
+// CarrierStats timestamp we've seen — Frontier's cAPI returns state
+// aligned with the game's CarrierStats checkpoint, which can be 30+
+// min stale. Journal deltas with timestamps AFTER this watermark stack
+// on top; older ones are presumed already reflected in the snapshot
+// and skipped (see state.Session.ApplyFCCargoDelta).
 func (s *Server) SetFCInventory(name string, cargo ravencolonial.Cargo) {
-	// Locate which owned MarketID this snapshot belongs to.
 	for _, c := range s.session.OwnedCarriers() {
 		if c.Name == name || c.Callsign == name {
-			s.session.SetFCCargo(c.MarketID, cargo)
+			anchor := s.session.LastCarrierStatsAt(c.MarketID)
+			s.session.SetFCCargo(c.MarketID, map[string]int(cargo), anchor)
 			return
 		}
 	}

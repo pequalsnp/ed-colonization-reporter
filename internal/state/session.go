@@ -44,6 +44,21 @@ type Session struct {
 	fcCargo map[int64]map[string]int
 	// fcCargoAt records when each MarketID's cargo was last touched.
 	fcCargoAt map[int64]time.Time
+	// fcCargoSyncedAt is the *game-time* watermark of the data currently
+	// cached. When cAPI gives us a snapshot, this is set to the latest
+	// CarrierStats timestamp at the time of the fetch — Frontier's cAPI
+	// is observed to return state aligned with the most recent
+	// CarrierStats event (and can be up to 30+ min stale). When the
+	// reporter sees a journal CargoTransfer / MarketBuy / MarketSell
+	// event, it applies the delta only if the event timestamp is AFTER
+	// this watermark — otherwise the change is presumed already baked
+	// into the cached snapshot. This is what stops backfill from
+	// double-counting deltas already in cAPI's response.
+	fcCargoSyncedAt map[int64]time.Time
+	// lastCarrierStatsAt is the timestamp of the most recent CarrierStats
+	// event we've seen for a given carrier. Used to anchor cAPI baselines
+	// to the game's own checkpoint clock.
+	lastCarrierStatsAt map[int64]time.Time
 }
 
 // OwnedCarrier is the minimal record we need about a commander's FC to sync it.
@@ -58,10 +73,12 @@ type OwnedCarrier struct {
 // New returns an empty Session.
 func New() *Session {
 	return &Session{
-		buildByMarket: map[int64]string{},
-		ownedCarriers: map[int64]OwnedCarrier{},
-		fcCargo:       map[int64]map[string]int{},
-		fcCargoAt:     map[int64]time.Time{},
+		buildByMarket:      map[int64]string{},
+		ownedCarriers:      map[int64]OwnedCarrier{},
+		fcCargo:            map[int64]map[string]int{},
+		fcCargoAt:          map[int64]time.Time{},
+		fcCargoSyncedAt:    map[int64]time.Time{},
+		lastCarrierStatsAt: map[int64]time.Time{},
 	}
 }
 
@@ -262,11 +279,44 @@ func (s *Session) OwnedCarriers() []OwnedCarrier {
 	return out
 }
 
-// SetFCCargo overwrites the cached cargo for a given MarketID. Used
-// after a full snapshot (cAPI poll, Market.json read).
-func (s *Session) SetFCCargo(marketID int64, cargo map[string]int) {
+// NoteCarrierStats records the timestamp of a CarrierStats event for a
+// given FC. The reporter calls this on every CarrierStats event (live
+// AND replayed) so we know the most recent in-game checkpoint time —
+// which is where Frontier's cAPI cache anchors its response.
+func (s *Session) NoteCarrierStats(marketID int64, at time.Time) {
+	if marketID == 0 || at.IsZero() {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if existing := s.lastCarrierStatsAt[marketID]; existing.IsZero() || at.After(existing) {
+		s.lastCarrierStatsAt[marketID] = at
+	}
+}
+
+// LastCarrierStatsAt returns the latest CarrierStats timestamp we've
+// seen for a given MarketID, or the zero time if none yet.
+func (s *Session) LastCarrierStatsAt(marketID int64) time.Time {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.lastCarrierStatsAt[marketID]
+}
+
+// SetFCCargo overwrites the cached cargo for a given MarketID and
+// stamps it with the game-time the snapshot represents. Callers should
+// pass the latest CarrierStats timestamp at the time of the cAPI fetch
+// when known (since cAPI aligns with CarrierStats); a Market.json read
+// can pass the event's own timestamp; otherwise pass time.Now() — that
+// just means "apply every future delta on top of this".
+//
+// Calls with an older syncedAt than what's already cached are ignored,
+// so a slow cAPI response can't clobber a fresher Market.json read.
+func (s *Session) SetFCCargo(marketID int64, cargo map[string]int, syncedAt time.Time) {
 	if marketID == 0 {
 		return
+	}
+	if syncedAt.IsZero() {
+		syncedAt = time.Now()
 	}
 	cp := make(map[string]int, len(cargo))
 	for k, v := range cargo {
@@ -276,20 +326,38 @@ func (s *Session) SetFCCargo(marketID int64, cargo map[string]int) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if existing := s.fcCargoSyncedAt[marketID]; !existing.IsZero() && syncedAt.Before(existing) {
+		return
+	}
 	s.fcCargo[marketID] = cp
+	s.fcCargoSyncedAt[marketID] = syncedAt
 	s.fcCargoAt[marketID] = time.Now()
 }
 
-// ApplyFCCargoDelta adds a signed delta to the cached FC cargo. Used
-// after a CargoTransfer or MarketBuy/Sell event so the GUI reflects
-// the change immediately rather than waiting for the next cAPI poll.
+// ApplyFCCargoDelta adds a signed delta to the cached FC cargo if the
+// event timestamp is AFTER the cached snapshot's watermark. Older
+// events are presumed already reflected in the snapshot and silently
+// skipped — this is what prevents backfill from double-counting
+// deltas that cAPI already included.
+//
+// Pass time.Time{} (zero) to force-apply regardless of watermark; that
+// is the right thing for purely-local state that has no canonical
+// snapshot to defer to (effectively never happens today, but keeps the
+// helper composable).
+//
 // Entries that hit 0 or below are pruned.
-func (s *Session) ApplyFCCargoDelta(marketID int64, delta map[string]int) {
+func (s *Session) ApplyFCCargoDelta(marketID int64, delta map[string]int, eventAt time.Time) {
 	if marketID == 0 || len(delta) == 0 {
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if !eventAt.IsZero() {
+		if synced := s.fcCargoSyncedAt[marketID]; !synced.IsZero() && !eventAt.After(synced) {
+			// Already in baseline — don't double-apply.
+			return
+		}
+	}
 	cur := s.fcCargo[marketID]
 	if cur == nil {
 		cur = map[string]int{}
@@ -302,6 +370,9 @@ func (s *Session) ApplyFCCargoDelta(marketID int64, delta map[string]int) {
 		}
 	}
 	s.fcCargoAt[marketID] = time.Now()
+	if !eventAt.IsZero() {
+		s.fcCargoSyncedAt[marketID] = eventAt
+	}
 }
 
 // FCCargo returns a copy of the cached cargo for a given MarketID.

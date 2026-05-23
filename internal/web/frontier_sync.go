@@ -115,24 +115,20 @@ func (s *Server) pollFleetCarrier(ctx context.Context) {
 		cargo[key] += item.Quantity
 	}
 
-	// Cache the snapshot before we send it so the GUI can render it even
-	// if ravencolonial is down or the user has no rcc-key set.
+	// Cache the snapshot so the GUI can render it.
+	//
+	// Important: we used to also POST OverwriteCarrierCargo to
+	// ravencolonial on every cAPI sync, but cAPI is observed to lag the
+	// game's CarrierStats event by 30+ minutes, so the overwrite
+	// repeatedly clobbered ravencolonial's accumulated PATCH-delta state
+	// with stale numbers. Now the snapshot only updates the local cache;
+	// ravencolonial is kept in sync by the PATCH-delta path on each
+	// CargoTransfer / MarketBuy / MarketSell event, which is live.
+	//
+	// (A user-triggered "force overwrite" path is in the works for
+	// reconciling RC when local + RC drift apart; for now, RC heals via
+	// deltas alone.)
 	s.SetFCInventory(fc.Name.Filtered, cargo)
-
-	if err := s.client.OverwriteCarrierCargo(ctx, fc.MarketID, cargo); err != nil {
-		if errors.Is(err, ravencolonial.ErrNoAPIKey) {
-			s.hub.Publish(reporter.Status{
-				Time: time.Now(), Level: reporter.LevelWarn,
-				Message: "cAPI fetched FC inventory but no rcc-key set; can't POST to ravencolonial",
-			})
-			return
-		}
-		s.hub.Publish(reporter.Status{
-			Time: time.Now(), Level: reporter.LevelError,
-			Message: "Sync FC cargo (from cAPI) failed: " + err.Error(),
-		})
-		return
-	}
 
 	total := 0
 	for _, n := range cargo {
@@ -140,6 +136,6 @@ func (s *Server) pollFleetCarrier(ctx context.Context) {
 	}
 	s.hub.Publish(reporter.Status{
 		Time: time.Now(), Level: reporter.LevelOK,
-		Message: fmt.Sprintf("Synced FC %s from cAPI (%d distinct commodities, %d units)", fc.Name.Callsign, len(cargo), total),
+		Message: fmt.Sprintf("Synced FC %s from cAPI (%d distinct commodities, %d units) — local only, RC not touched", fc.Name.Callsign, len(cargo), total),
 	})
 }
