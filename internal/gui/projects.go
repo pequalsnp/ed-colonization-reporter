@@ -146,12 +146,21 @@ func (p *projectsPanel) runAutoRefresh(ctx context.Context) {
 	// setting at runtime via Save.
 	reconfig := time.NewTicker(30 * time.Second)
 	defer reconfig.Stop()
+	// Local-only redraw on a faster cadence so live FC/ship cargo
+	// changes (from journal Cargo / CargoTransfer / MarketBuy events)
+	// reflect in the panel within a couple seconds. rerender() reads
+	// Session state directly — no network call, no fetch of project
+	// list from ravencolonial — so this is cheap to fire frequently.
+	redraw := time.NewTicker(2 * time.Second)
+	defer redraw.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
 			p.refreshNow()
+		case <-redraw.C:
+			p.rerender()
 		case <-reconfig.C:
 			want := projectsPollInterval(p.srv.Config().ProjectsPollSeconds)
 			if want != interval {
