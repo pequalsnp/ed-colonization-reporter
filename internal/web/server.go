@@ -348,46 +348,66 @@ func (s *Server) LastFCInventory() (name string, cargo ravencolonial.Cargo, at t
 	return n, out, t
 }
 
-// HealRCFromCAPI fetches the cAPI /fleetcarrier snapshot and POSTs
-// OverwriteCarrierCargo to ravencolonial, replacing RC's per-FC cargo
-// with cAPI's view. This is a *destructive* one-shot intended for
-// repairing RC state after a wipe or drift — it loses any PATCH-delta
-// state that's newer than cAPI's snapshot.
+// HealRCFromCAPI POSTs the local FC cargo cache to ravencolonial as an
+// OverwriteCarrierCargo, replacing whatever cargo state RC holds.
 //
-// Returns the cargo map and total units POSTed on success.
+// The local cache is what the GUI displays: cAPI's last snapshot plus
+// any live deltas applied since (CargoTransfer / MarketBuy / MarketSell
+// / Market.json). So this is "push what I'm showing you to RC" — no
+// fresh cAPI fetch needed (which would hit the 15-min cooldown).
+//
+// Use case: RC's per-FC cargo has drifted from reality (e.g. previous
+// versions of this app sent cargo: {} on PUT and wiped it). After this
+// call, RC matches the local cache; live deltas continue from there.
 func (s *Server) HealRCFromCAPI(ctx context.Context) (cargo ravencolonial.Cargo, units int, err error) {
-	if s.frontierCAPI == nil {
-		return nil, 0, errors.New("frontier cAPI not configured")
-	}
-	if !s.frontierCAPI.HasTokens(ctx) {
-		return nil, 0, errors.New("not signed in to Frontier")
-	}
-	fc, err := s.frontierCAPI.FleetCarrier(ctx)
-	if err != nil {
-		return nil, 0, fmt.Errorf("cAPI fetch: %w", err)
-	}
-	if fc.MarketID == 0 {
-		return nil, 0, errors.New("cAPI returned a FleetCarrier with no MarketID")
-	}
-	cargo = ravencolonial.Cargo{}
-	for _, item := range fc.Cargo {
-		key := frontier.CommodityKey(item.Commodity)
-		if key == "" || item.Quantity == 0 {
-			continue
+	// We need a MarketID. Try the owned carriers list first; fall back
+	// to one fresh cAPI lookup ONLY if we don't know one yet (rare —
+	// usually CarrierStats has fired by now).
+	owned := s.session.OwnedCarriers()
+	var marketID int64
+	var callsign string
+	for _, c := range owned {
+		if c.MarketID != 0 {
+			marketID = c.MarketID
+			callsign = c.Callsign
+			break
 		}
-		cargo[key] += item.Quantity
+	}
+	if marketID == 0 {
+		if s.frontierCAPI == nil || !s.frontierCAPI.HasTokens(ctx) {
+			return nil, 0, errors.New("no Fleet Carrier known yet — dock at it once so CarrierStats fires, or sign in to cAPI")
+		}
+		fc, ferr := s.frontierCAPI.FleetCarrier(ctx)
+		if ferr != nil {
+			return nil, 0, fmt.Errorf("locating FC via cAPI: %w", ferr)
+		}
+		marketID = fc.MarketID
+		callsign = fc.Name.Callsign
+	}
+	if marketID == 0 {
+		return nil, 0, errors.New("no MarketID resolved")
+	}
+
+	local, _ := s.session.FCCargo(marketID)
+	if len(local) == 0 {
+		return nil, 0, errors.New("local FC cache is empty; nothing to push. Try Refresh FC now first")
+	}
+
+	cargo = ravencolonial.Cargo{}
+	for k, v := range local {
+		if v > 0 {
+			cargo[k] = v
+		}
 	}
 	for _, n := range cargo {
 		units += n
 	}
-	if err := s.client.OverwriteCarrierCargo(ctx, fc.MarketID, cargo); err != nil {
+	if err := s.client.OverwriteCarrierCargo(ctx, marketID, cargo); err != nil {
 		return cargo, units, fmt.Errorf("RC overwrite: %w", err)
 	}
-	// Also update the local cache so the GUI immediately reflects it.
-	s.session.SetFCCargo(fc.MarketID, map[string]int(cargo), time.Now())
 	s.hub.Publish(reporter.Status{
 		Time: time.Now(), Level: reporter.LevelOK,
-		Message: fmt.Sprintf("Healed RC for FC %s — overwrote %d commodities, %d units from cAPI", fc.Name.Callsign, len(cargo), units),
+		Message: fmt.Sprintf("Healed RC for FC %s — overwrote %d commodities, %d units from local cache", callsign, len(cargo), units),
 	})
 	return cargo, units, nil
 }
