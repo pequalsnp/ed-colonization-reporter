@@ -581,7 +581,15 @@ func mustURL(s string) *url.URL {
 // race with sign-in and other startup work, then queries GitHub once.
 // Failure is logged silently — an offline user shouldn't see an
 // "update check failed" toast on every launch.
+//
+// Dev builds (version "dev", no ldflags injection) skip the auto-
+// check entirely — anyone running `go run` is editing the code, not
+// waiting to be told a tag was published. The Help → Check for
+// updates menu still works on demand.
 func (a *App) runUpdateCheck(ctx context.Context) {
+	if a.srv.GetVersion() == "dev" {
+		return
+	}
 	select {
 	case <-ctx.Done():
 		return
