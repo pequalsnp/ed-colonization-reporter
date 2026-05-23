@@ -432,12 +432,14 @@ func (r *Reporter) handleCarrierStats(ctx context.Context, e journal.CarrierStat
 		Callsign: e.Callsign,
 	})
 	c, _ := r.Session.OwnedCarrier(e.CarrierID)
+	// Ravencolonial's field semantics are inverted from how we name
+	// things internally: server `name` = callsign, `displayName` =
+	// vanity name. Trailing " |" suffix is a known journal artefact
+	// the server doesn't want (SrvSurvey strips it at ColonyData.cs:555).
 	fc := ravencolonial.FleetCarrier{
-		MarketID:      c.MarketID,
-		Name:          c.Name,
-		Callsign:      c.Callsign,
-		StarSystem:    c.StarSystem,
-		SystemAddress: c.SystemAddress,
+		MarketID:    c.MarketID,
+		Name:        c.Callsign,
+		DisplayName: strings.TrimSuffix(strings.TrimSpace(c.Name), " |"),
 	}
 	if err := r.API.PutFleetCarrier(ctx, fc); err != nil {
 		if errors.Is(err, ravencolonial.ErrNoAPIKey) {

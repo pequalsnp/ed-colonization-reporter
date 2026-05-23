@@ -436,6 +436,12 @@ func (a *App) buildMenu(tabs *container.AppTabs) *fyne.MainMenu {
 		}
 	})
 
+	openLog := fyne.NewMenuItem("Open activity log", func() {
+		if p := a.srv.ActivityLogPath(); p != "" {
+			_ = web.OpenBrowser(p)
+		}
+	})
+
 	quit := fyne.NewMenuItem("Quit", func() { a.window.Close() })
 
 	fileMenu := fyne.NewMenu("File",
@@ -443,6 +449,7 @@ func (a *App) buildMenu(tabs *container.AppTabs) *fyne.MainMenu {
 		fyne.NewMenuItemSeparator(),
 		openConfig,
 		openJournal,
+		openLog,
 		fyne.NewMenuItemSeparator(),
 		quit,
 	)

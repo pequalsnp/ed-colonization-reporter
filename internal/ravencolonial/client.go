@@ -73,8 +73,11 @@ type APIError struct {
 
 func (e *APIError) Error() string {
 	body := e.Body
-	if len(body) > 200 {
-		body = body[:200] + "…"
+	// Truncate at 1 KiB — enough to see ASP.NET ProblemDetails responses
+	// (which include the failing model name + field path) without
+	// flooding the activity log on huge HTML error pages.
+	if len(body) > 1024 {
+		body = body[:1024] + "…"
 	}
 	return fmt.Sprintf("ravencolonial: %s %s: %s", e.URL, e.Status, body)
 }

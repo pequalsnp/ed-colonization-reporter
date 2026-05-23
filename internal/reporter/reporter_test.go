@@ -58,7 +58,9 @@ func TestHandleCarrierStats_RegistersAndPublishes(t *testing.T) {
 		t.Fatalf("fcPuts = %d", len(api.fcPuts))
 	}
 	put := api.fcPuts[0]
-	if put.Callsign != "ABC-12X" || put.Name != "DREAMSTRIDER" || put.MarketID != 3700000123 {
+	// Ravencolonial flips name/displayName vs Frontier cAPI: server
+	// `name` is the callsign, `displayName` is the vanity name.
+	if put.Name != "ABC-12X" || put.DisplayName != "DREAMSTRIDER" || put.MarketID != 3700000123 {
 		t.Errorf("PutFleetCarrier got %+v", put)
 	}
 }

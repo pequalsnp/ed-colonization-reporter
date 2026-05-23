@@ -70,6 +70,10 @@ type Server struct {
 	// file. The GUI uses it to decide whether to show a welcome dialog.
 	firstRun bool
 
+	// activityLog persists every statusHub entry to disk for offline
+	// reading. Optional; nil if open failed.
+	activityLog *activityFileLogger
+
 	// fcInventory caches the most recent cAPI /fleetcarrier cargo snapshot
 	// as {commodity_symbol: qty}. Updated by runFrontierCAPISync; read
 	// by the GUI's Projects panel for the FC column.
@@ -257,6 +261,29 @@ func (s *Server) FrontierClientID() string {
 	return s.frontierFlow.ClientID
 }
 
+// runActivityFileLog drains the statusHub to the file-backed logger
+// until the context is cancelled. One goroutine per server lifetime.
+func (s *Server) runActivityFileLog(ctx context.Context) {
+	ch, cancel := s.hub.Subscribe()
+	defer cancel()
+	defer s.activityLog.close()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case status, ok := <-ch:
+			if !ok {
+				return
+			}
+			s.activityLog.write(status)
+		}
+	}
+}
+
+// ActivityLogPath returns the on-disk location of the persistent activity
+// log. The GUI exposes this in the Help menu so users can find or share it.
+func (s *Server) ActivityLogPath() string { return resolveActivityLogPath() }
+
 // LastEventAt returns the wall-clock time of the most recent journal
 // event the tailer processed. Returns the zero time if nothing has
 // arrived yet (game not running, journal dir misconfigured, etc.).
@@ -346,6 +373,16 @@ func (s *Server) Start(ctx context.Context) error {
 	tailerCtx, cancel := context.WithCancel(ctx)
 	s.tailerCancel = cancel
 	go s.runTailer(tailerCtx)
+
+	// Disk-persist every status entry so the user (and bug-reporters)
+	// can read history after the app closes. Best-effort; log failures
+	// don't break the running session.
+	s.activityLog = newActivityFileLogger(resolveActivityLogPath())
+	if err := s.activityLog.start(); err == nil {
+		go s.runActivityFileLog(tailerCtx)
+	} else {
+		s.activityLog = nil
+	}
 
 	// Fetch the EDSM discard list on startup (and refresh periodically).
 	// Safe to start even when EDSM is disabled — it's a tiny HTTP call.

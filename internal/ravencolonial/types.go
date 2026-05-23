@@ -65,14 +65,18 @@ type ProjectCreate struct {
 // integer amount delivered by the commander on this contribution.
 type Contribution map[string]int
 
-// FleetCarrier is the body of PUT /api/fc/{marketId} — the metadata about a
-// commander's Fleet Carrier. The cargo is sent separately via Cargo.
+// FleetCarrier is the body of PUT /api/fc/{marketId} — and the response
+// shape of GET /api/fc/{marketId}. Mirrors SrvSurvey's RavenColonial.cs
+// class FleetCarrier (lines 804-815). Note the semantic flip from how
+// Frontier's cAPI names things: ravencolonial's `name` is the callsign
+// (e.g. "QZN-W6N") and `displayName` is the vanity name (e.g.
+// "DREAMSTRIDER"). Don't send `cargo` here unless you actually intend
+// to overwrite the server's cargo record — pass nil to leave it alone.
 type FleetCarrier struct {
-	MarketID      int64  `json:"marketId"`
-	Name          string `json:"name"`
-	Callsign      string `json:"callsign"`
-	StarSystem    string `json:"starSystem,omitempty"`
-	SystemAddress int64  `json:"systemAddress,omitempty"`
+	MarketID    int64          `json:"marketId"`
+	Name        string         `json:"name"`        // callsign — required
+	DisplayName string         `json:"displayName"` // vanity name — required
+	Cargo       map[string]int `json:"cargo,omitempty"`
 }
 
 // Cargo is the body of POST /api/fc/{marketId}/cargo — a {commodity: stock}

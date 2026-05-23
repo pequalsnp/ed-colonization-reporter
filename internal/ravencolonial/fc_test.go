@@ -34,9 +34,11 @@ func TestPutFleetCarrier_PostsExpectedBody(t *testing.T) {
 	})
 	c = New(WithBaseURL(c.baseURL), WithAPIKey("k-1"))
 
+	// Server's `name` is the callsign; `displayName` is the vanity name.
 	fc := FleetCarrier{
-		MarketID: 3700000123, Name: "DREAMSTRIDER", Callsign: "ABC-12X",
-		StarSystem: "Sol", SystemAddress: 10477373803,
+		MarketID:    3700000123,
+		Name:        "ABC-12X",
+		DisplayName: "DREAMSTRIDER",
 	}
 	if err := c.PutFleetCarrier(context.Background(), fc); err != nil {
 		t.Fatalf("PutFleetCarrier: %v", err)
@@ -44,8 +46,12 @@ func TestPutFleetCarrier_PostsExpectedBody(t *testing.T) {
 	if headerKey != "k-1" {
 		t.Errorf("rcc-key = %q", headerKey)
 	}
-	if got != fc {
-		t.Errorf("body = %+v, want %+v", got, fc)
+	if got.MarketID != fc.MarketID || got.Name != fc.Name || got.DisplayName != fc.DisplayName {
+		t.Errorf("body = %+v, want MarketID=%d Name=%q DisplayName=%q",
+			got, fc.MarketID, fc.Name, fc.DisplayName)
+	}
+	if got.Cargo != nil {
+		t.Errorf("PutFleetCarrier should omit Cargo when nil; got %v", got.Cargo)
 	}
 }
 
