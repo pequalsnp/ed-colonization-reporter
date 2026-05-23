@@ -12,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/pequalsnp/ed-colonization-reporter/internal/journal"
@@ -91,21 +90,6 @@ type Reporter struct {
 	// switch — the list rarely changes mid-session.
 	linkedCarriersFetchedFor string
 
-	// pendingFCDeltas holds CargoTransfer / MarketBuy / MarketSell deltas
-	// observed during backfill (raw.Replayed == true). We can't apply
-	// them straight away because the cAPI baseline anchor isn't known
-	// until backfill completes — applying immediately risks double-
-	// counting deltas that cAPI's snapshot already includes. FlushPending
-	// FCDeltas drains the queue after the post-backfill cAPI sync has
-	// anchored the watermark.
-	pendingFCMu sync.Mutex
-	pendingFC   []pendingFCDelta
-}
-
-type pendingFCDelta struct {
-	MarketID int64
-	Delta    map[string]int
-	At       time.Time
 }
 
 // New constructs a Reporter.
@@ -382,7 +366,7 @@ func (r *Reporter) handleFCMarketDelta(ctx context.Context, marketID int64, type
 	}
 	delta := ravencolonial.Cargo{key: count}
 	if replayed {
-		r.queueFCDelta(marketID, mapStringInt(delta), eventAt)
+		// See handleCargoTransfer: trust cAPI's snapshot, skip backfill.
 		return nil
 	}
 	if err := r.API.PatchCarrierCargo(ctx, marketID, delta); err != nil {
@@ -438,10 +422,14 @@ func (r *Reporter) handleCargoTransfer(ctx context.Context, e journal.CargoTrans
 		return nil
 	}
 	if replayed {
-		// Queue rather than apply: until backfill completes and the
-		// post-backfill cAPI sync has anchored the watermark, we don't
-		// know which of these deltas are already in cAPI's snapshot.
-		r.queueFCDelta(marketID, mapStringInt(delta), e.Timestamp)
+		// Trust cAPI's snapshot as authoritative for the FC's state at
+		// boot. We empirically observed cAPI's data is anchored to a
+		// timestamp we cannot reliably determine — sometimes it's the
+		// latest CarrierStats in the journal, sometimes it's more
+		// recent. Re-applying replayed deltas on top of an already-
+		// fresh cAPI snapshot caused 1265-unit-per-transfer overcounts.
+		// Skip the local update; the cAPI baseline IS the truth at
+		// boot, and live (post-EOF) deltas apply on top.
 		return nil
 	}
 	if err := r.API.PatchCarrierCargo(ctx, marketID, delta); err != nil {
@@ -505,37 +493,14 @@ func (r *Reporter) handleCargo(ctx context.Context, e journal.CargoEvent) error 
 	return nil
 }
 
-// queueFCDelta records a backfill-time FC delta for later application by
-// FlushPendingFCDeltas. Safe to call concurrently with FlushPendingFC
-// Deltas.
-func (r *Reporter) queueFCDelta(marketID int64, delta map[string]int, at time.Time) {
-	if marketID == 0 || len(delta) == 0 {
-		return
-	}
-	r.pendingFCMu.Lock()
-	defer r.pendingFCMu.Unlock()
-	r.pendingFC = append(r.pendingFC, pendingFCDelta{MarketID: marketID, Delta: delta, At: at})
-}
-
-// FlushPendingFCDeltas applies every backfill-queued FC delta to the
-// session cache and clears the queue. Intended to be called by the
-// server *after* the post-backfill cAPI sync has set the watermark; at
-// that point Session.ApplyFCCargoDelta will correctly drop deltas
-// already in cAPI's snapshot (timestamp <= watermark) and apply the
-// rest in chronological order.
-func (r *Reporter) FlushPendingFCDeltas() {
-	r.pendingFCMu.Lock()
-	queue := r.pendingFC
-	r.pendingFC = nil
-	r.pendingFCMu.Unlock()
-	if len(queue) == 0 {
-		return
-	}
-	for _, d := range queue {
-		r.Session.ApplyFCCargoDelta(d.MarketID, d.Delta, d.At)
-	}
-	r.emit(LevelInfo, "Replayed %d backfilled FC delta(s) onto post-cAPI baseline", len(queue))
-}
+// FlushPendingFCDeltas is a no-op kept on the type so the web.Server
+// call site doesn't have to special-case its absence. We used to queue
+// backfill deltas and replay them after the first post-backfill cAPI
+// sync, but cAPI's snapshot is observed to include events past the
+// latest journal CarrierStats — so any replay risked double-counting.
+// The Reporter now trusts cAPI as authoritative for FC state at boot
+// and only applies live deltas.
+func (r *Reporter) FlushPendingFCDeltas() {}
 
 func (r *Reporter) handleCarrierStats(ctx context.Context, e journal.CarrierStatsEvent) error {
 	if e.CarrierID == 0 {
