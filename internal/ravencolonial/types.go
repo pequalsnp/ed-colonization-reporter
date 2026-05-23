@@ -67,16 +67,20 @@ type Contribution map[string]int
 
 // FleetCarrier is the body of PUT /api/fc/{marketId} — and the response
 // shape of GET /api/fc/{marketId}. Mirrors SrvSurvey's RavenColonial.cs
-// class FleetCarrier (lines 804-815). Note the semantic flip from how
-// Frontier's cAPI names things: ravencolonial's `name` is the callsign
-// (e.g. "QZN-W6N") and `displayName` is the vanity name (e.g.
-// "DREAMSTRIDER"). Don't send `cargo` here unless you actually intend
-// to overwrite the server's cargo record — pass nil to leave it alone.
+// class FleetCarrier, but with two additional fields the live server
+// requires (discovered empirically via a 400 with
+//   "missing required properties including: 'cargo'." +
+//   "The newFC field is required.")
+//
+// Field semantics flip from Frontier's cAPI: ravencolonial's `name`
+// is the callsign (e.g. "QZN-W6N"), `displayName` is the vanity name
+// (e.g. "DREAMSTRIDER").
 type FleetCarrier struct {
 	MarketID    int64          `json:"marketId"`
 	Name        string         `json:"name"`        // callsign — required
 	DisplayName string         `json:"displayName"` // vanity name — required
-	Cargo       map[string]int `json:"cargo,omitempty"`
+	NewFC       bool           `json:"newFC"`       // true on first publish; we send false from CarrierStats
+	Cargo       map[string]int `json:"cargo"`       // required, may be empty map
 }
 
 // Cargo is the body of POST /api/fc/{marketId}/cargo — a {commodity: stock}

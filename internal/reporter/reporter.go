@@ -436,10 +436,18 @@ func (r *Reporter) handleCarrierStats(ctx context.Context, e journal.CarrierStat
 	// things internally: server `name` = callsign, `displayName` =
 	// vanity name. Trailing " |" suffix is a known journal artefact
 	// the server doesn't want (SrvSurvey strips it at ColonyData.cs:555).
+	//
+	// `cargo` is required by the server even on a metadata-only publish.
+	// We send an empty map — the dedicated POST /api/fc/{marketId}/cargo
+	// path (called from runFrontierCAPISync) is what actually owns the
+	// cargo record. Empty here means "I don't know yet, don't touch."
+	// `newFC` = false: we're not claiming to register a brand-new FC.
 	fc := ravencolonial.FleetCarrier{
 		MarketID:    c.MarketID,
 		Name:        c.Callsign,
 		DisplayName: strings.TrimSuffix(strings.TrimSpace(c.Name), " |"),
+		NewFC:       false,
+		Cargo:       map[string]int{},
 	}
 	if err := r.API.PutFleetCarrier(ctx, fc); err != nil {
 		if errors.Is(err, ravencolonial.ErrNoAPIKey) {
