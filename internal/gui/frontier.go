@@ -2,11 +2,13 @@ package gui
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -16,11 +18,13 @@ import (
 // frontierPanel handles the Sign in / Sign out controls and status line.
 type frontierPanel struct {
 	srv *web.Server
+	win fyne.Window
 
-	status      *canvas.Text
-	signin      *widget.Button
-	signout     *widget.Button
-	refreshFC   *widget.Button
+	status    *canvas.Text
+	signin    *widget.Button
+	signout   *widget.Button
+	refreshFC *widget.Button
+	healRC    *widget.Button
 }
 
 func newFrontierPanel(srv *web.Server) *frontierPanel {
@@ -41,13 +45,61 @@ func newFrontierPanel(srv *web.Server) *frontierPanel {
 	p.refreshFC.Importance = widget.MediumImportance
 	p.refreshFC.Hide()
 
+	p.healRC = widget.NewButtonWithIcon("Heal RC from cAPI", theme.WarningIcon(), func() { go p.doHealRC() })
+	p.healRC.Importance = widget.WarningImportance
+	p.healRC.Hide()
+
 	return p
 }
+
+func (p *frontierPanel) SetWindow(w fyne.Window) { p.win = w }
 
 func (p *frontierPanel) content() fyne.CanvasObject {
 	return container.NewVBox(
 		container.NewPadded(p.status),
-		container.NewHBox(p.signin, p.signout, p.refreshFC),
+		container.NewHBox(p.signin, p.signout, p.refreshFC, p.healRC),
+	)
+}
+
+// doHealRC asks for confirmation, then fetches the cAPI /fleetcarrier
+// snapshot and POSTs it as an OverwriteCarrierCargo to ravencolonial,
+// replacing whatever cargo state RC currently holds for the FC.
+//
+// Use case: RC's per-FC cargo has drifted from reality (e.g. previous
+// versions of this app sent `cargo: {}` PUTs that wiped state). The
+// cAPI snapshot is treated as the source of truth for that moment.
+func (p *frontierPanel) doHealRC() {
+	confirm := func(ok bool) {
+		if !ok {
+			return
+		}
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			cargo, units, err := p.srv.HealRCFromCAPI(ctx)
+			fyne.Do(func() {
+				if err != nil {
+					dialog.ShowError(fmt.Errorf("heal failed: %w", err), p.win)
+					return
+				}
+				dialog.ShowInformation(
+					"RC healed",
+					fmt.Sprintf("Overwrote ravencolonial with cAPI's snapshot: %d commodities, %d units.", len(cargo), units),
+					p.win,
+				)
+			})
+		}()
+	}
+	if p.win == nil {
+		// No window means no dialog; just run without confirm.
+		confirm(true)
+		return
+	}
+	dialog.ShowConfirm(
+		"Heal RC from cAPI?",
+		"This will POST cAPI's current Fleet Carrier snapshot to ravencolonial, REPLACING whatever cargo state RC holds for the FC.\n\nUse this only when RC has drifted from reality. The cAPI data is itself slightly stale (~minutes), so any transfers made in the last few minutes may need a manual catch-up.",
+		confirm,
+		p.win,
 	)
 }
 
@@ -81,12 +133,14 @@ func (p *frontierPanel) refresh() {
 			p.signin.Hide()
 			p.signout.Show()
 			p.refreshFC.Show()
+			p.healRC.Show()
 		} else {
 			p.status.Text = "Not signed in. Click below — a browser tab will open for the Frontier consent screen."
 			p.status.Color = edFgMuted
 			p.signin.Show()
 			p.signout.Hide()
 			p.refreshFC.Hide()
+			p.healRC.Hide()
 		}
 		p.status.Refresh()
 	})

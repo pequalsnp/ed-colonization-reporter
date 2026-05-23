@@ -166,6 +166,15 @@ func (c *Client) Contribute(ctx context.Context, buildID, cmdr string, contrib C
 // PutFleetCarrier registers or updates the Fleet Carrier metadata for a
 // MarketID. Requires the rcc-key (configured via WithAPIKey); the server
 // will return 401/403 if no key is set.
+//
+// Cargo semantics (per RC's `RavenColonial.cs:236`): `"Cargo untouched
+// if it is null"`. Pass FleetCarrier.Cargo == nil to leave the
+// server-side cargo intact (the right thing to do for routine metadata
+// publishes). Pass a populated *map to overwrite cargo; pass a pointer
+// to an empty map to clear cargo. **Do NOT default cargo to an empty
+// map** on metadata publishes — that wipes the FC's cargo on the
+// server and the only path to recovery is a fresh Market.json
+// overwrite.
 func (c *Client) PutFleetCarrier(ctx context.Context, fc FleetCarrier) error {
 	if fc.MarketID == 0 {
 		return errors.New("PutFleetCarrier: MarketID required")
@@ -175,6 +184,23 @@ func (c *Client) PutFleetCarrier(ctx context.Context, fc FleetCarrier) error {
 	}
 	path := fmt.Sprintf("/api/fc/%d", fc.MarketID)
 	return c.do(ctx, http.MethodPut, path, fc, nil)
+}
+
+// GetFleetCarrier fetches the server-side FleetCarrier record. RC's
+// response is the source of truth for FC cargo state — we seed the
+// local cache from this at boot rather than polling Frontier's cAPI
+// (which has unbounded staleness). Returns the parsed body or an
+// error; the rcc-key is NOT required for GET.
+func (c *Client) GetFleetCarrier(ctx context.Context, marketID int64) (*FleetCarrier, error) {
+	if marketID == 0 {
+		return nil, errors.New("GetFleetCarrier: marketID required")
+	}
+	path := fmt.Sprintf("/api/fc/%d", marketID)
+	var fc FleetCarrier
+	if err := c.do(ctx, http.MethodGet, path, nil, &fc); err != nil {
+		return nil, err
+	}
+	return &fc, nil
 }
 
 // OverwriteCarrierCargo replaces the cargo snapshot stored for a Fleet

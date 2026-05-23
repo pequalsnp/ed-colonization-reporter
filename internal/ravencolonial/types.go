@@ -66,21 +66,26 @@ type ProjectCreate struct {
 type Contribution map[string]int
 
 // FleetCarrier is the body of PUT /api/fc/{marketId} — and the response
-// shape of GET /api/fc/{marketId}. Mirrors SrvSurvey's RavenColonial.cs
-// class FleetCarrier, but with two additional fields the live server
-// requires (discovered empirically via a 400 with
-//   "missing required properties including: 'cargo'." +
-//   "The newFC field is required.")
+// shape of GET /api/fc/{marketId}. The shape mirrors SrvSurvey's
+// FleetCarrier model with the addition of the `newFC` flag the live
+// server requires.
 //
 // Field semantics flip from Frontier's cAPI: ravencolonial's `name`
 // is the callsign (e.g. "QZN-W6N"), `displayName` is the vanity name
 // (e.g. "DREAMSTRIDER").
+//
+// **Cargo must be a pointer.** A nil pointer serializes to JSON null,
+// which the server interprets as "leave cargo untouched". A pointer
+// to an empty map serializes to {} which the server treats as
+// "clear cargo". This distinction is what was wiping our RC state on
+// every CarrierStats publish — see the comment on PutFleetCarrier
+// for the rules.
 type FleetCarrier struct {
-	MarketID    int64          `json:"marketId"`
-	Name        string         `json:"name"`        // callsign — required
-	DisplayName string         `json:"displayName"` // vanity name — required
-	NewFC       bool           `json:"newFC"`       // true on first publish; we send false from CarrierStats
-	Cargo       map[string]int `json:"cargo"`       // required, may be empty map
+	MarketID    int64           `json:"marketId"`
+	Name        string          `json:"name"`        // callsign — required
+	DisplayName string          `json:"displayName"` // vanity name — required
+	NewFC       bool            `json:"newFC"`       // true on first publish; false on subsequent metadata updates
+	Cargo       *map[string]int `json:"cargo"`       // nil = leave untouched, empty {} = clear, populated = overwrite
 }
 
 // Cargo is the body of POST /api/fc/{marketId}/cargo — a {commodity: stock}

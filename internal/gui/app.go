@@ -102,6 +102,7 @@ func (a *App) show(ctx context.Context) {
 	a.settings = newSettingsPanel(a.srv)
 	a.settings.window = a.window
 	a.frontierPanel = newFrontierPanel(a.srv)
+	a.frontierPanel.SetWindow(a.window)
 	a.destBar = newDestBar(a.srv)
 
 	projectsTab := container.NewTabItemWithIcon("Projects", theme.GridIcon(), a.projects.content())

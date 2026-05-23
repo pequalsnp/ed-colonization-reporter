@@ -698,6 +698,8 @@ type fakeAPI struct {
 	fcCargoErr         error
 	architectErr       error
 	linkedCarriersErr  error
+	getFCResp          *ravencolonial.FleetCarrier
+	getFCErr           error
 }
 
 func (f *fakeAPI) linkedCalls() []string {
@@ -807,6 +809,15 @@ func (f *fakeAPI) CommanderCarriers(_ context.Context, cmdr string) ([]ravencolo
 	err := f.linkedCarriersErr
 	f.mu.Unlock()
 	return resp, err
+}
+
+func (f *fakeAPI) GetFleetCarrier(_ context.Context, marketID int64) (*ravencolonial.FleetCarrier, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.getFCErr != nil {
+		return nil, f.getFCErr
+	}
+	return f.getFCResp, nil
 }
 
 type architectCall struct{ System, Commander string }

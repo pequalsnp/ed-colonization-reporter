@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pequalsnp/ed-colonization-reporter/internal/journal"
@@ -30,6 +31,7 @@ type APIClient interface {
 	PutFleetCarrier(ctx context.Context, fc ravencolonial.FleetCarrier) error
 	OverwriteCarrierCargo(ctx context.Context, marketID int64, cargo ravencolonial.Cargo) error
 	PatchCarrierCargo(ctx context.Context, marketID int64, delta ravencolonial.Cargo) error
+	GetFleetCarrier(ctx context.Context, marketID int64) (*ravencolonial.FleetCarrier, error)
 	SetSystemArchitect(ctx context.Context, systemName, cmdr string) error
 	PatchProject(ctx context.Context, buildID string, patch ravencolonial.ProjectPatch) error
 	CommanderCarriers(ctx context.Context, cmdr string) ([]ravencolonial.LinkedCarrier, error)
@@ -90,6 +92,16 @@ type Reporter struct {
 	// switch — the list rarely changes mid-session.
 	linkedCarriersFetchedFor string
 
+	// fcPublished tracks MarketIDs we've already PUT FleetCarrier
+	// metadata for in this session. Frontier fires CarrierStats
+	// multiple times per dock; we only need to publish once.
+	fcOnceMu    sync.Mutex
+	fcPublished map[int64]bool
+
+	// fcSeeded tracks MarketIDs we've already seeded from RC's GET.
+	// Same idea as fcPublished but for the initial cache seed.
+	fcSeededMu sync.Mutex
+	fcSeeded   map[int64]bool
 }
 
 // New constructs a Reporter.
@@ -511,28 +523,41 @@ func (r *Reporter) handleCarrierStats(ctx context.Context, e journal.CarrierStat
 		Name:     e.Name,
 		Callsign: e.Callsign,
 	})
-	// Record the timestamp so cAPI sync can anchor its baseline: cAPI's
-	// /fleetcarrier response is empirically aligned with the most recent
-	// CarrierStats event, so deltas older than this watermark are
-	// already in cAPI's snapshot.
 	r.Session.NoteCarrierStats(e.CarrierID, e.Timestamp)
+
+	// Only PUT the carrier metadata once per session per MarketID.
+	// Frontier fires CarrierStats several times per dock; PUTting on
+	// every one (a) wastes requests and (b) used to wipe RC's cargo
+	// because we were sending an empty cargo map. The RC server holds
+	// the metadata across sessions so a single publish per session is
+	// plenty — and if it never changes (which is the common case) the
+	// publish is just a touch.
+	if !r.markPutFC(e.CarrierID) {
+		// Also seed the local cache from RC's authoritative state the
+		// first time we see this FC. SrvSurvey-style: RC is the source
+		// of truth, journal deltas accumulate on top.
+		r.seedFCFromRC(ctx, e.CarrierID)
+		return nil
+	}
+	r.seedFCFromRC(ctx, e.CarrierID)
+
 	c, _ := r.Session.OwnedCarrier(e.CarrierID)
 	// Ravencolonial's field semantics are inverted from how we name
 	// things internally: server `name` = callsign, `displayName` =
 	// vanity name. Trailing " |" suffix is a known journal artefact
 	// the server doesn't want (SrvSurvey strips it at ColonyData.cs:555).
 	//
-	// `cargo` is required by the server even on a metadata-only publish.
-	// We send an empty map — the dedicated POST /api/fc/{marketId}/cargo
-	// path (called from runFrontierCAPISync) is what actually owns the
-	// cargo record. Empty here means "I don't know yet, don't touch."
-	// `newFC` = false: we're not claiming to register a brand-new FC.
+	// `cargo` is nil here on purpose: RC's docstring says "Cargo
+	// untouched if it is null", which serializes from a nil *map. An
+	// empty map ({}) would WIPE the server's cargo — that was the
+	// previous bug.  `newFC` = false: we're updating metadata, not
+	// claiming to register a brand-new FC.
 	fc := ravencolonial.FleetCarrier{
 		MarketID:    c.MarketID,
 		Name:        c.Callsign,
 		DisplayName: strings.TrimSuffix(strings.TrimSpace(c.Name), " |"),
 		NewFC:       false,
-		Cargo:       map[string]int{},
+		Cargo:       nil, // null on the wire — leaves server cargo untouched
 	}
 	if err := r.API.PutFleetCarrier(ctx, fc); err != nil {
 		if errors.Is(err, ravencolonial.ErrNoAPIKey) {
@@ -544,6 +569,57 @@ func (r *Reporter) handleCarrierStats(ctx context.Context, e journal.CarrierStat
 	}
 	r.emit(LevelOK, "Published Fleet Carrier %s (%s)", c.Name, c.Callsign)
 	return nil
+}
+
+// markPutFC is true the first time it's called for a given MarketID in
+// this Reporter's lifetime; false on every call thereafter. We use it
+// to ensure PutFleetCarrier runs only once per session per FC.
+func (r *Reporter) markPutFC(marketID int64) bool {
+	r.fcOnceMu.Lock()
+	defer r.fcOnceMu.Unlock()
+	if r.fcPublished == nil {
+		r.fcPublished = map[int64]bool{}
+	}
+	if r.fcPublished[marketID] {
+		return false
+	}
+	r.fcPublished[marketID] = true
+	return true
+}
+
+// seedFCFromRC populates the local FC cargo cache from ravencolonial's
+// GET /api/fc/{marketId} — the same call SrvSurvey uses for FC state.
+// Called once per session per MarketID, on the first CarrierStats we
+// see for that carrier. On error or empty response, leaves the cache
+// untouched.
+func (r *Reporter) seedFCFromRC(ctx context.Context, marketID int64) {
+	r.fcSeededMu.Lock()
+	if r.fcSeeded == nil {
+		r.fcSeeded = map[int64]bool{}
+	}
+	if r.fcSeeded[marketID] {
+		r.fcSeededMu.Unlock()
+		return
+	}
+	r.fcSeeded[marketID] = true
+	r.fcSeededMu.Unlock()
+
+	fc, err := r.API.GetFleetCarrier(ctx, marketID)
+	if err != nil {
+		if !ravencolonial.IsNotFound(err) {
+			r.emit(LevelWarn, "Seed FC %d from RC failed: %v", marketID, err)
+		}
+		return
+	}
+	if fc == nil || fc.Cargo == nil {
+		return
+	}
+	r.Session.SetFCCargo(marketID, *fc.Cargo, time.Now())
+	total := 0
+	for _, n := range *fc.Cargo {
+		total += n
+	}
+	r.emit(LevelOK, "Seeded local FC cache from ravencolonial (%d commodities, %d units)", len(*fc.Cargo), total)
 }
 
 func (r *Reporter) handleMarket(ctx context.Context, e journal.MarketEvent) error {
