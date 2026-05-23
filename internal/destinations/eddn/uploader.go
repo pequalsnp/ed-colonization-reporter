@@ -95,6 +95,11 @@ func (u *Uploader) HandleEvent(ctx context.Context, raw journal.Raw) error {
 	if !u.enabled.Load() {
 		return destinations.ErrDisabled
 	}
+	// Skip backfill events: replaying old jumps + docks to EDDN is
+	// noise on the community feed even when it deduplicates upstream.
+	if raw.Replayed {
+		return nil
+	}
 	// Need at least a commander name for uploaderID; without it, the EDDN
 	// header is invalid. Skip until LoadGame populates it.
 	if u.Session.Commander() == "" {

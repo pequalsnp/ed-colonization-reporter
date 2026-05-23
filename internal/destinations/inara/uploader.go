@@ -79,6 +79,13 @@ func (u *Uploader) HandleEvent(ctx context.Context, raw journal.Raw) error {
 	if !u.enabled.Load() {
 		return destinations.ErrDisabled
 	}
+	// Skip backfill: Inara's add*TravelLog endpoints APPEND, so replaying
+	// historical FSDJumps / Docked events from the same session would
+	// create duplicate entries on the user's profile. The other
+	// destinations skip backfill as well to match.
+	if raw.Replayed {
+		return nil
+	}
 	if u.Session.Commander() == "" {
 		return nil
 	}

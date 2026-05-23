@@ -106,6 +106,12 @@ func (u *Uploader) HandleEvent(ctx context.Context, raw journal.Raw) error {
 	if !u.enabled.Load() {
 		return destinations.ErrDisabled
 	}
+	// Skip backfill: EDSM's API would happily accept old events with
+	// their original timestamps, but the user opted into the relay to
+	// share live activity, not to bulk-import a single replayed session.
+	if raw.Replayed {
+		return nil
+	}
 	key := u.apiKeyCopy()
 	if key == "" {
 		return nil // no key configured; silently skip
