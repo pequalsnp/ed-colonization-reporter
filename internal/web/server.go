@@ -478,7 +478,17 @@ func (s *Server) Start(ctx context.Context) error {
 	// Flush() is a no-op without an API key.
 	s.inara.StartBackground(tailerCtx, 0)
 	// Background poller for the Frontier cAPI /fleetcarrier endpoint.
-	go s.runFrontierCAPISync(tailerCtx)
+	// cAPI polling for FC cargo is disabled: SrvSurvey treats RC as the
+	// authoritative source of FC state (no cAPI integration at all),
+	// and our attempts to use cAPI as a freshness boost introduced more
+	// staleness/double-count bugs than they fixed. The Frontier OAuth
+	// + token storage code stays compiled-in for now in case we want
+	// it back for non-cargo features. Cargo state now flows: live
+	// journal CargoTransfer / MarketBuy / MarketSell PATCHes RC and
+	// the local cache; Market.json on the Market event POSTs an
+	// overwrite to RC and seeds the local cache. seedFCFromRC pulls
+	// from RC at boot when CarrierStats fires.
+	_ = s.runFrontierCAPISync // keep the function compiled (referenced)
 
 	if s.OpenBrowser != nil {
 		s.OpenBrowser(s.URL())

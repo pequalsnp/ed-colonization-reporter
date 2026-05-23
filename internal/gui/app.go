@@ -706,7 +706,6 @@ func (a *App) refreshTrayMenu() {
 			a.window.RequestFocus()
 		}),
 		fyne.NewMenuItem("Refresh projects", func() { a.projects.refreshNow() }),
-		fyne.NewMenuItem("Refresh FC inventory", func() { a.srv.ForceFCSync() }),
 		fyne.NewMenuItemSeparator(),
 		fyne.NewMenuItem("Quit", func() { a.app.Quit() }),
 	)

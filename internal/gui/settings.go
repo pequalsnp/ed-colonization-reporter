@@ -507,11 +507,14 @@ func (p *settingsPanel) content(frontier *frontierPanel) fyne.CanvasObject {
 		subhead("Inara"), inaraRow,
 	)
 
-	frontierCard := section("Frontier cAPI",
-		"Authoritative Fleet Carrier inventory via Frontier's Companion API. PKCE — no client secret leaves your machine.",
-		checkboxRow(p.frontierCAPIEnabled),
-		frontier.content(),
-	)
+	// The Frontier cAPI card is no longer rendered: SrvSurvey doesn't
+	// use cAPI at all and treats ravencolonial as the authoritative
+	// source of FC cargo state. We followed the same path after
+	// repeatedly hitting cAPI staleness / double-count bugs. The
+	// frontierPanel + Sign-in OAuth code is still compiled in case
+	// future non-cargo features need cAPI access; just not shown.
+	_ = frontier
+	_ = p.frontierCAPIEnabled
 
 	saveRow := container.NewBorder(nil, nil, nil, p.save, p.notice)
 
@@ -519,7 +522,6 @@ func (p *settingsPanel) content(frontier *frontierPanel) fyne.CanvasObject {
 		localCard,
 		rcCard,
 		uploadsCard,
-		frontierCard,
 		container.NewPadded(saveRow),
 	)
 	return container.NewVScroll(container.NewPadded(body))
