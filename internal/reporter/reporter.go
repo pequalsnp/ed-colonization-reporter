@@ -86,6 +86,7 @@ type Reporter struct {
 	// readMarketFile is overridable for tests. Production leaves it nil and
 	// the package-default implementation reads from JournalDir.
 	readMarketFile func(dir string) (*journal.MarketFile, error)
+	readCargoFile  func(dir string) (*journal.CargoFile, error)
 
 	// linkedCarriersFetchedFor tracks which commander we last pulled the
 	// /api/cmdr/{cmdr}/fc/all list for. Only fetch once per commander
@@ -473,12 +474,16 @@ func mapStringInt(c ravencolonial.Cargo) map[string]int {
 // handleCargo mirrors a journal Cargo event into Session.shipCargo so the
 // GUI can show a "SHIP" column alongside FC stock. Cargo events fire
 // after every inventory-changing journal event (CargoTransfer, MarketBuy,
-// MarketSell, ColonisationContribution), so this stays current without
-// us reproducing each delta's bookkeeping.
+// MarketSell, ColonisationContribution).
 //
 // Vessel is "Ship" for the ship hold and "SRV" for ground vehicles —
 // we only mirror the ship hold; SRV cargo isn't useful for delivery
 // planning.
+//
+// **Inventory may be empty or missing on the journal line** — Frontier
+// then expects clients to read the full state from Cargo.json. We do
+// that when the inline Inventory is empty but Count > 0, AND when Count
+// is 0 (empty ship; clear the cache regardless of file presence).
 func (r *Reporter) handleCargo(ctx context.Context, e journal.CargoEvent) error {
 	if e.Vessel != "" && e.Vessel != "Ship" {
 		return nil
@@ -497,10 +502,29 @@ func (r *Reporter) handleCargo(ctx context.Context, e journal.CargoEvent) error 
 		}
 		cargo[key] += it.Count
 	}
-	// Note: when the journal line carries an empty Inventory but
-	// Count > 0, the game wrote the full state to Cargo.json. Ignoring
-	// that case for now — most events do inline the inventory, and the
-	// next inventory-changing event will give us a fresh full snapshot.
+	// Fallback: if the journal line didn't inline an Inventory but the
+	// ship is supposed to be holding cargo, read Cargo.json.
+	if len(cargo) == 0 && e.Count > 0 && r.JournalDir != "" {
+		read := r.readCargoFile
+		if read == nil {
+			read = journal.ReadCargoFile
+		}
+		if cf, err := read(r.JournalDir); err == nil && cf != nil {
+			for _, it := range cf.Inventory {
+				if it.Count <= 0 {
+					continue
+				}
+				key := NormalizeCommodity(it.Name)
+				if key == "" {
+					key = NormalizeCommodity(it.NameLocalised)
+				}
+				if key == "" {
+					continue
+				}
+				cargo[key] += it.Count
+			}
+		}
+	}
 	r.Session.SetShipCargo(cargo, e.Timestamp)
 	return nil
 }
