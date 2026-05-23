@@ -170,12 +170,11 @@ func (r *Reporter) HandleEvent(ctx context.Context, raw journal.Raw) error {
 			r.Session.SetSystem(e.StarSystem, e.SystemAddress)
 		}
 		r.Session.SetDocked(e.StationName, e.MarketID, e.SystemAddress)
-		// If we're docking at a build site we already track, refresh its
-		// faction/body metadata on ravencolonial. Safe on replay because
-		// PatchProject with the same values is a no-op server-side.
-		if buildID, ok := r.Session.BuildFor(e.MarketID); ok {
-			r.refreshProjectMetadata(ctx, buildID, e)
-		}
+		// Note: previously we POSTed a sparse PatchProject here to
+		// refresh faction/body, but ravencolonial returned 400 — it
+		// likely requires the full ProjectUpdate body shape. Backed
+		// out until the contract is understood; depot events that
+		// arrive shortly after dock already carry the data we need.
 	case journal.EventUndocked:
 		r.Session.SetUndocked()
 	case journal.EventColonisationConstructionDepot:
