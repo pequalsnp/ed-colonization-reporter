@@ -448,12 +448,13 @@ func (panel *projectsPanel) buildProjectCard(p ravencolonial.Project, expanded b
 	if outstanding > 0 {
 		if expanded {
 			fcName, fcInv, _ := panel.srv.LastFCInventory()
+			shipInv, _ := panel.srv.LastShipCargo()
 			if fcName != "" {
-				heading := canvas.NewText(fmt.Sprintf("Against your Fleet Carrier (%s):", fcName), edFgMuted)
+				heading := canvas.NewText(fmt.Sprintf("Against your Fleet Carrier (%s) + ship cargo:", fcName), edFgMuted)
 				heading.TextSize = 11
 				body.Add(container.NewPadded(heading))
 			}
-			body.Add(allCommoditiesGrid(p.Commodities, fcInv))
+			body.Add(allCommoditiesGrid(p.Commodities, fcInv, shipInv))
 		} else {
 			body.Add(commoditiesLine(p.Commodities))
 		}
@@ -494,11 +495,16 @@ func (panel *projectsPanel) buildProjectCard(p ravencolonial.Project, expanded b
 }
 
 // allCommoditiesGrid renders every outstanding commodity sorted by
-// need-quantity desc, with columns: Need · FC · Diff · Name. The FC
-// columns are omitted when fcInventory is nil (cAPI not signed in or
-// never fetched). Two grid columns wide so 20+ commodities don't make
-// the card absurdly tall.
-func allCommoditiesGrid(commodities map[string]int, fcInventory map[string]int) fyne.CanvasObject {
+// need-quantity desc, with columns: Need · FC · Ship · Diff · Name.
+// The FC/Ship/Diff columns are omitted when fcInventory is nil (cAPI
+// not signed in or never fetched) — in that case we don't have FC
+// data and a ship-only diff would be misleading. Two grid columns
+// wide so 20+ commodities don't make the card absurdly tall.
+//
+// shipInventory may be nil; when present, the Diff column shows
+// (FC + Ship) - Need so the user can see whether the combined hold
+// is enough to satisfy the outstanding need.
+func allCommoditiesGrid(commodities map[string]int, fcInventory, shipInventory map[string]int) fyne.CanvasObject {
 	entries := topCommodities(commodities, 1000)
 	if len(entries) == 0 {
 		return container.NewWithoutLayout()
@@ -512,7 +518,7 @@ func allCommoditiesGrid(commodities map[string]int, fcInventory map[string]int) 
 	rows.Add(commoditiesHeader(fcInventory != nil))
 
 	for _, c := range entries {
-		rows.Add(commodityRow(c, fcInventory))
+		rows.Add(commodityRow(c, fcInventory, shipInventory))
 	}
 	return rows
 }
@@ -529,11 +535,12 @@ func commoditiesHeader(showFC bool) fyne.CanvasObject {
 		return container.NewHBox(need, header("COMMODITY"))
 	}
 	fc := container.NewGridWrap(fyne.NewSize(56, 14), header("FC"))
+	ship := container.NewGridWrap(fyne.NewSize(56, 14), header("SHIP"))
 	diff := container.NewGridWrap(fyne.NewSize(56, 14), header("DIFF"))
-	return container.NewHBox(need, fc, diff, header("COMMODITY"))
+	return container.NewHBox(need, fc, ship, diff, header("COMMODITY"))
 }
 
-func commodityRow(c commodityEntry, fcInventory map[string]int) fyne.CanvasObject {
+func commodityRow(c commodityEntry, fcInventory, shipInventory map[string]int) fyne.CanvasObject {
 	cellNum := func(value string, fg color.Color) fyne.CanvasObject {
 		t := canvas.NewText(value, fg)
 		t.TextSize = 12
@@ -549,20 +556,38 @@ func commodityRow(c commodityEntry, fcInventory map[string]int) fyne.CanvasObjec
 	if fcInventory == nil {
 		return container.NewHBox(need, name)
 	}
-	fcQty, hasFC := fcInventory[c.Symbol]
+	fcQty := fcInventory[c.Symbol]
+	shipQty := 0
+	if shipInventory != nil {
+		shipQty = shipInventory[c.Symbol]
+	}
+	available := fcQty + shipQty
+
 	fcCell := cellNum("—", edFgDim)
-	diffCell := cellNum("—", edFgDim)
-	if hasFC {
+	if fcQty > 0 {
 		fcCell = cellNum(humanCount(fcQty), edFg)
-		// Diff = FC - Need. Negative means deficit (red), positive surplus (green).
-		delta := fcQty - c.Count
-		if delta < 0 {
-			diffCell = cellNum("-"+humanCount(-delta), edStatusError)
-		} else {
-			diffCell = cellNum("+"+humanCount(delta), edStatusOK)
+	}
+	shipCell := cellNum("—", edFgDim)
+	if shipQty > 0 {
+		shipCell = cellNum(humanCount(shipQty), edFg)
+	}
+	diffCell := cellNum("—", edFgDim)
+	if available > 0 || fcInventory[c.Symbol] >= 0 {
+		// Diff = (FC + Ship) - Need. Negative = deficit (red),
+		// positive = surplus (green). We only show a diff when we
+		// actually have some FC data or stock on hand; an entry the
+		// FC has never carried just shows "—".
+		_, hasFCEntry := fcInventory[c.Symbol]
+		if hasFCEntry || shipQty > 0 {
+			delta := available - c.Count
+			if delta < 0 {
+				diffCell = cellNum("-"+humanCount(-delta), edStatusError)
+			} else {
+				diffCell = cellNum("+"+humanCount(delta), edStatusOK)
+			}
 		}
 	}
-	return container.NewHBox(need, fcCell, diffCell, name)
+	return container.NewHBox(need, fcCell, shipCell, diffCell, name)
 }
 
 func absInt(n int) int {

@@ -40,6 +40,14 @@ type Tailer struct {
 	PollInterval time.Duration
 	StartAt      StartPosition
 
+	// OnLiveMode, if set, is called exactly once when the tailer transitions
+	// from backfill replay to live mode. For StartAtEnd that is at the start
+	// of Run (no backfill); for StartAtBeginning that is when the initial
+	// EOF is reached. Callers use this to gate operations that need a fully
+	//-replayed session state — e.g. anchoring a cAPI snapshot to the latest
+	// CarrierStats timestamp in the journal.
+	OnLiveMode func()
+
 	// Now is injected for tests; callers should leave it nil.
 	Now func() time.Time
 }
@@ -75,6 +83,22 @@ func (t *Tailer) Run(ctx context.Context, out chan<- Raw) error {
 	// first time readMore reaches EOF, so every event read after that is
 	// flagged as a "live" event.
 	replaying := t.StartAt == StartAtBeginning
+
+	// liveModeFired ensures OnLiveMode is invoked at most once.
+	liveModeFired := false
+	fireLiveMode := func() {
+		if liveModeFired {
+			return
+		}
+		liveModeFired = true
+		if t.OnLiveMode != nil {
+			t.OnLiveMode()
+		}
+	}
+	if !replaying {
+		// StartAtEnd: there is no backfill, we are already live.
+		fireLiveMode()
+	}
 
 	emit := func(raw Raw) error {
 		select {
@@ -145,9 +169,11 @@ func (t *Tailer) Run(ctx context.Context, out chan<- Raw) error {
 			}
 			if err == io.EOF {
 				// We've drained the file. Anything that arrives next is
-				// genuinely new — flip out of replay mode for future reads.
+				// genuinely new — flip out of replay mode for future reads
+				// and signal callers that the backfill is complete.
 				if replaying {
 					replaying = false
+					fireLiveMode()
 				}
 				return nil
 			}

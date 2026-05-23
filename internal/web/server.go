@@ -59,6 +59,15 @@ type Server struct {
 	frontierStore   frontier.TokenStore
 	frontierTrigger chan struct{} // buffered(1): kick the cAPI poller
 
+	// liveModeCh is closed by the tailer (via OnLiveMode) once it has
+	// transitioned out of backfill replay. runFrontierCAPISync waits on
+	// it before the first cAPI fetch so the anchor (LastCarrierStatsAt)
+	// reflects every CarrierStats event already in the journal — anchor
+	// reached during partial backfill leaves the watermark too early
+	// and causes deltas already in cAPI's snapshot to be re-applied.
+	liveModeCh   chan struct{}
+	liveModeOnce sync.Once
+
 	// lastEventAt is the wall-clock time (unix nanos) of the most
 	// recent journal event the tailer handed to the multiplex.
 	// Atomic for lock-free reads from the GUI's liveness indicator.
@@ -95,8 +104,16 @@ func New(cfg config.Config) *Server {
 		cfg:             cfg,
 		hub:             newStatusHub(),
 		frontierTrigger: make(chan struct{}, 1),
+		liveModeCh:      make(chan struct{}),
 		startedAt:       time.Now(),
 	}
+}
+
+// signalLiveMode closes liveModeCh exactly once, regardless of how many
+// times the tailer fires its callback (defensive; the tailer also
+// gates internally, but the boundary contract here is "idempotent").
+func (s *Server) signalLiveMode() {
+	s.liveModeOnce.Do(func() { close(s.liveModeCh) })
 }
 
 // SetFirstRun records that this launch found no pre-existing config.
@@ -306,6 +323,13 @@ func (s *Server) SetFCInventory(name string, cargo ravencolonial.Cargo) {
 			return
 		}
 	}
+}
+
+// LastShipCargo returns the current ship cargo manifest plus the
+// timestamp it was last refreshed. Reads from state.Session, populated
+// by every journal Cargo event.
+func (s *Server) LastShipCargo() (cargo map[string]int, at time.Time) {
+	return s.session.ShipCargo()
 }
 
 // LastFCInventory returns the aggregated cargo across all owned FCs
@@ -554,7 +578,11 @@ func (s *Server) runTailer(ctx context.Context) {
 		Message: "Tailing " + dir,
 	})
 
-	tl := &journal.Tailer{Dir: dir, StartAt: startAt}
+	tl := &journal.Tailer{
+		Dir:        dir,
+		StartAt:    startAt,
+		OnLiveMode: s.signalLiveMode,
+	}
 	events := make(chan journal.Raw, 64)
 	tailErr := make(chan error, 1)
 	go func() { tailErr <- tl.Run(ctx, events) }()

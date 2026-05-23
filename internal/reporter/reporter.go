@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pequalsnp/ed-colonization-reporter/internal/journal"
@@ -89,6 +90,22 @@ type Reporter struct {
 	// /api/cmdr/{cmdr}/fc/all list for. Only fetch once per commander
 	// switch — the list rarely changes mid-session.
 	linkedCarriersFetchedFor string
+
+	// pendingFCDeltas holds CargoTransfer / MarketBuy / MarketSell deltas
+	// observed during backfill (raw.Replayed == true). We can't apply
+	// them straight away because the cAPI baseline anchor isn't known
+	// until backfill completes — applying immediately risks double-
+	// counting deltas that cAPI's snapshot already includes. FlushPending
+	// FCDeltas drains the queue after the post-backfill cAPI sync has
+	// anchored the watermark.
+	pendingFCMu sync.Mutex
+	pendingFC   []pendingFCDelta
+}
+
+type pendingFCDelta struct {
+	MarketID int64
+	Delta    map[string]int
+	At       time.Time
 }
 
 // New constructs a Reporter.
@@ -243,6 +260,12 @@ func (r *Reporter) HandleEvent(ctx context.Context, raw journal.Raw) error {
 			return fmt.Errorf("beacon: %w", err)
 		}
 		return r.handleBeaconDeployed(ctx, e)
+	case journal.EventCargo:
+		var e journal.CargoEvent
+		if err := json.Unmarshal(raw.Payload, &e); err != nil {
+			return fmt.Errorf("cargo: %w", err)
+		}
+		return r.handleCargo(ctx, e)
 	case journal.EventCargoTransfer:
 		var e journal.CargoTransferEvent
 		if err := json.Unmarshal(raw.Payload, &e); err != nil {
@@ -359,7 +382,7 @@ func (r *Reporter) handleFCMarketDelta(ctx context.Context, marketID int64, type
 	}
 	delta := ravencolonial.Cargo{key: count}
 	if replayed {
-		r.Session.ApplyFCCargoDelta(marketID, mapStringInt(delta), eventAt)
+		r.queueFCDelta(marketID, mapStringInt(delta), eventAt)
 		return nil
 	}
 	if err := r.API.PatchCarrierCargo(ctx, marketID, delta); err != nil {
@@ -415,9 +438,10 @@ func (r *Reporter) handleCargoTransfer(ctx context.Context, e journal.CargoTrans
 		return nil
 	}
 	if replayed {
-		// Local cache only — see Session.ApplyFCCargoDelta for the
-		// timestamp watermark that decides whether to apply or skip.
-		r.Session.ApplyFCCargoDelta(marketID, mapStringInt(delta), e.Timestamp)
+		// Queue rather than apply: until backfill completes and the
+		// post-backfill cAPI sync has anchored the watermark, we don't
+		// know which of these deltas are already in cAPI's snapshot.
+		r.queueFCDelta(marketID, mapStringInt(delta), e.Timestamp)
 		return nil
 	}
 	if err := r.API.PatchCarrierCargo(ctx, marketID, delta); err != nil {
@@ -444,6 +468,73 @@ func mapStringInt(c ravencolonial.Cargo) map[string]int {
 		out[k] = v
 	}
 	return out
+}
+
+// handleCargo mirrors a journal Cargo event into Session.shipCargo so the
+// GUI can show a "SHIP" column alongside FC stock. Cargo events fire
+// after every inventory-changing journal event (CargoTransfer, MarketBuy,
+// MarketSell, ColonisationContribution), so this stays current without
+// us reproducing each delta's bookkeeping.
+//
+// Vessel is "Ship" for the ship hold and "SRV" for ground vehicles —
+// we only mirror the ship hold; SRV cargo isn't useful for delivery
+// planning.
+func (r *Reporter) handleCargo(ctx context.Context, e journal.CargoEvent) error {
+	if e.Vessel != "" && e.Vessel != "Ship" {
+		return nil
+	}
+	cargo := make(map[string]int, len(e.Inventory))
+	for _, it := range e.Inventory {
+		if it.Count <= 0 {
+			continue
+		}
+		key := NormalizeCommodity(it.Name)
+		if key == "" {
+			key = NormalizeCommodity(it.NameLocalised)
+		}
+		if key == "" {
+			continue
+		}
+		cargo[key] += it.Count
+	}
+	// Note: when the journal line carries an empty Inventory but
+	// Count > 0, the game wrote the full state to Cargo.json. Ignoring
+	// that case for now — most events do inline the inventory, and the
+	// next inventory-changing event will give us a fresh full snapshot.
+	r.Session.SetShipCargo(cargo, e.Timestamp)
+	return nil
+}
+
+// queueFCDelta records a backfill-time FC delta for later application by
+// FlushPendingFCDeltas. Safe to call concurrently with FlushPendingFC
+// Deltas.
+func (r *Reporter) queueFCDelta(marketID int64, delta map[string]int, at time.Time) {
+	if marketID == 0 || len(delta) == 0 {
+		return
+	}
+	r.pendingFCMu.Lock()
+	defer r.pendingFCMu.Unlock()
+	r.pendingFC = append(r.pendingFC, pendingFCDelta{MarketID: marketID, Delta: delta, At: at})
+}
+
+// FlushPendingFCDeltas applies every backfill-queued FC delta to the
+// session cache and clears the queue. Intended to be called by the
+// server *after* the post-backfill cAPI sync has set the watermark; at
+// that point Session.ApplyFCCargoDelta will correctly drop deltas
+// already in cAPI's snapshot (timestamp <= watermark) and apply the
+// rest in chronological order.
+func (r *Reporter) FlushPendingFCDeltas() {
+	r.pendingFCMu.Lock()
+	queue := r.pendingFC
+	r.pendingFC = nil
+	r.pendingFCMu.Unlock()
+	if len(queue) == 0 {
+		return
+	}
+	for _, d := range queue {
+		r.Session.ApplyFCCargoDelta(d.MarketID, d.Delta, d.At)
+	}
+	r.emit(LevelInfo, "Replayed %d backfilled FC delta(s) onto post-cAPI baseline", len(queue))
 }
 
 func (r *Reporter) handleCarrierStats(ctx context.Context, e journal.CarrierStatsEvent) error {

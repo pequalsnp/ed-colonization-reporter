@@ -24,12 +24,29 @@ const frontierPollInterval = 15 * time.Minute
 // Fleet Carrier inventory and forwards it to ravencolonial. Runs
 // continuously until ctx is cancelled; cheap to leave running when the
 // user hasn't signed in (the poll function early-returns).
+//
+// The very first sync is deferred until the tailer signals live mode,
+// because the cAPI snapshot is anchored to the journal's most recent
+// CarrierStats event — and that anchor is only reliably the latest
+// once backfill replay has finished. After that first sync, the queued
+// backfill FC deltas are flushed onto the new baseline (timestamp-
+// gated, so anything already in cAPI's snapshot is skipped).
 func (s *Server) runFrontierCAPISync(ctx context.Context) {
 	t := time.NewTicker(frontierPollInterval)
 	defer t.Stop()
-	// Kick once after startup so a previously-signed-in user gets an
-	// immediate sync without waiting 15 minutes.
-	s.kickFrontierSync()
+
+	// Wait for backfill to complete (or fire immediately if StartAtEnd).
+	select {
+	case <-ctx.Done():
+		return
+	case <-s.liveModeCh:
+	}
+
+	s.pollFleetCarrierIfEnabled(ctx)
+	if s.rep != nil {
+		s.rep.FlushPendingFCDeltas()
+	}
+
 	for {
 		select {
 		case <-ctx.Done():

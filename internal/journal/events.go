@@ -23,6 +23,7 @@ const (
 	EventMarket                        = "Market"
 	EventMarketBuy                     = "MarketBuy"
 	EventMarketSell                    = "MarketSell"
+	EventCargo                         = "Cargo"
 	EventCargoTransfer                 = "CargoTransfer"
 	EventColonisationConstructionDepot = "ColonisationConstructionDepot"
 	EventColonisationContribution      = "ColonisationContribution"
@@ -233,6 +234,27 @@ type MarketEvent struct {
 	StationName string `json:"StationName"`
 	StationType string `json:"StationType"`
 	StarSystem  string `json:"StarSystem"`
+}
+
+// CargoInventoryItem is one row of a Cargo event's Inventory.
+type CargoInventoryItem struct {
+	Name          string `json:"Name"`           // short symbol, e.g. "titanium"
+	NameLocalised string `json:"Name_Localised"` // "Titanium"
+	Count         int    `json:"Count"`
+	Stolen        int    `json:"Stolen,omitempty"`
+	MissionID     int64  `json:"MissionID,omitempty"`
+}
+
+// CargoEvent fires when the ship's cargo manifest changes — periodically,
+// and immediately after CargoTransfer / MarketBuy / MarketSell /
+// ColonisationContribution. It carries a snapshot of the ship's current
+// inventory inline; if Inventory is empty the game wrote the full state
+// to Cargo.json instead (and the event line is just the trigger).
+type CargoEvent struct {
+	Envelope
+	Vessel    string               `json:"Vessel"` // "Ship" | "SRV"
+	Count     int                  `json:"Count"`
+	Inventory []CargoInventoryItem `json:"Inventory"`
 }
 
 // CargoTransferDirection labels each row in a CargoTransfer event. Values

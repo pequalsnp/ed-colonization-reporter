@@ -59,6 +59,12 @@ type Session struct {
 	// event we've seen for a given carrier. Used to anchor cAPI baselines
 	// to the game's own checkpoint clock.
 	lastCarrierStatsAt map[int64]time.Time
+
+	// shipCargo is the current snapshot of the ship's hold, mirrored
+	// from Cargo events. The journal emits a Cargo event after every
+	// inventory change, so this stays current without explicit polling.
+	shipCargo   map[string]int
+	shipCargoAt time.Time
 }
 
 // OwnedCarrier is the minimal record we need about a commander's FC to sync it.
@@ -79,7 +85,42 @@ func New() *Session {
 		fcCargoAt:          map[int64]time.Time{},
 		fcCargoSyncedAt:    map[int64]time.Time{},
 		lastCarrierStatsAt: map[int64]time.Time{},
+		shipCargo:          map[string]int{},
 	}
+}
+
+// SetShipCargo replaces the ship cargo snapshot. Called from the
+// reporter on every Cargo event. Pass time.Time{} to default to now.
+func (s *Session) SetShipCargo(cargo map[string]int, at time.Time) {
+	cp := make(map[string]int, len(cargo))
+	for k, v := range cargo {
+		if v > 0 {
+			cp[k] = v
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.shipCargo = cp
+	if at.IsZero() {
+		at = time.Now()
+	}
+	s.shipCargoAt = at
+}
+
+// ShipCargo returns a copy of the cached ship cargo manifest plus the
+// timestamp it was last updated. Returns (nil, zero-time) before any
+// Cargo event has been seen.
+func (s *Session) ShipCargo() (map[string]int, time.Time) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if len(s.shipCargo) == 0 {
+		return nil, s.shipCargoAt
+	}
+	cp := make(map[string]int, len(s.shipCargo))
+	for k, v := range s.shipCargo {
+		cp[k] = v
+	}
+	return cp, s.shipCargoAt
 }
 
 // SetCommander records the commander identity.
