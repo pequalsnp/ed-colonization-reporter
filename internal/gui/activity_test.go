@@ -16,7 +16,6 @@ func TestSourceTagFor(t *testing.T) {
 		{"Inara: posted 4 events (4 ok, 0 warn, 0 fail)", "INARA"},
 		{"Synced FC LANDMINES4DEMOCRACY from cAPI (3 commodities, 2464 units)", "FC"},
 		{"FC cargo delta posted (2 commodity changes)", "FC"},
-		{"cAPI /fleetcarrier failed: HTTP 401", "cAPI"},
 		{"Reported depot abc-123: 5 commodities outstanding", "RC"},
 		{"Created ravencolonial project Belshaw Berth (auto-xyz)", "RC"},
 		{"Contributed to abc-123 as Jameson (32 items)", "RC"},

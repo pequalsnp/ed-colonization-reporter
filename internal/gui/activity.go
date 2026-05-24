@@ -369,8 +369,6 @@ func sourceTagStyle(dest string) (string, color.Color) {
 		return "INARA", edStatusInfo
 	case "FC sync":
 		return "FC", edStatusOK
-	case "cAPI":
-		return "cAPI", edOrange
 	case "RC":
 		return "RC", edStatusOK
 	}

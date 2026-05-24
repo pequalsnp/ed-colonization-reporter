@@ -46,12 +46,11 @@ type App struct {
 	app    fyne.App
 	window fyne.Window
 
-	statusBar     *statusBar
-	projects      *projectsPanel
-	activity      *activityPanel
-	settings      *settingsPanel
-	frontierPanel *frontierPanel
-	destBar       *destBar
+	statusBar *statusBar
+	projects  *projectsPanel
+	activity  *activityPanel
+	settings  *settingsPanel
+	destBar   *destBar
 
 	tabs         *container.AppTabs
 	activityTab  *container.TabItem
@@ -101,13 +100,11 @@ func (a *App) show(ctx context.Context) {
 	a.activity.AttachPrefs(a.app.Preferences())
 	a.settings = newSettingsPanel(a.srv)
 	a.settings.window = a.window
-	a.frontierPanel = newFrontierPanel(a.srv)
-	a.frontierPanel.SetWindow(a.window)
 	a.destBar = newDestBar(a.srv)
 
 	projectsTab := container.NewTabItemWithIcon("Projects", theme.GridIcon(), a.projects.content())
 	a.activityTab = container.NewTabItemWithIcon("Activity", theme.HistoryIcon(), a.activity.content())
-	settingsTab := container.NewTabItemWithIcon("Settings", theme.SettingsIcon(), a.settings.content(a.frontierPanel))
+	settingsTab := container.NewTabItemWithIcon("Settings", theme.SettingsIcon(), a.settings.content())
 	a.tabs = container.NewAppTabs(projectsTab, a.activityTab, settingsTab)
 	a.tabs.SetTabLocation(container.TabLocationTop)
 
@@ -177,7 +174,6 @@ func (a *App) show(ctx context.Context) {
 	go a.runStatusBarLoop(subCtx)
 	go a.runActivityLoop(subCtx)
 	go a.projects.runAutoRefresh(subCtx)
-	go a.frontierPanel.runStatusLoop(subCtx)
 	go a.destBar.runLoop(subCtx)
 	go a.runUpdateCheck(subCtx)
 
@@ -485,7 +481,6 @@ func (a *App) showAboutDialog() {
 	if p, err := config.Path(); err == nil {
 		configPath = p
 	}
-	tokenPath := a.srv.FrontierTokenPath()
 	uptime := time.Since(a.srv.SessionStartedAt())
 
 	body := container.NewVBox(
@@ -494,15 +489,13 @@ func (a *App) showAboutDialog() {
 		widget.NewLabel(""),
 		labelWrapped(
 			"Linux-first colonization tracking and journal relay for Elite Dangerous. "+
-				"Reports to ravencolonial.com and optionally EDDN, EDSM, Inara, and Frontier's cAPI.",
+				"Reports to ravencolonial.com and optionally EDDN, EDSM, and Inara.",
 		),
 		widget.NewLabel(""),
 		labelMuted("Session uptime: "+formatDuration(uptime)),
 		widget.NewLabel(""),
 		labelMuted("Config:"),
 		smallMono(configPath),
-		labelMuted("Frontier tokens:"),
-		smallMono(tokenPath),
 		widget.NewLabel(""),
 		labelMuted("MIT License — © 2026 Kyle Galloway"),
 		widget.NewHyperlink("github.com/pequalsnp/ed-colonization-reporter",

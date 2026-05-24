@@ -37,7 +37,6 @@ type settingsPanel struct {
 	edsmKey, inaraKey                                     *widget.Entry
 	inaraAppName                                          *widget.Entry
 	replaySession, eddnEnabled, edsmEnabled, inaraEnabled *widget.Check
-	frontierCAPIEnabled                                   *widget.Check
 	startMinimized                                        *widget.Check
 
 	pollSeconds *widget.Entry
@@ -109,8 +108,6 @@ func newSettingsPanel(srv *web.Server) *settingsPanel {
 	p.inaraTestStatus.TextSize = 11
 	p.inaraTestBtn = widget.NewButtonWithIcon("Test", theme.ConfirmIcon(), func() { go p.testInara() })
 	p.inaraTestBtn.Importance = widget.LowImportance
-	p.frontierCAPIEnabled = widget.NewCheck("Use cAPI for FC inventory ground-truth", nil)
-	p.frontierCAPIEnabled.SetChecked(cfg.FrontierCAPIEnabled)
 
 	p.save = widget.NewButtonWithIcon("Save settings", theme.ConfirmIcon(), p.doSave)
 	p.save.Importance = widget.HighImportance
@@ -464,7 +461,7 @@ func passwordRow(e *widget.Entry) fyne.CanvasObject {
 	return container.NewBorder(nil, nil, nil, btn, e)
 }
 
-func (p *settingsPanel) content(frontier *frontierPanel) fyne.CanvasObject {
+func (p *settingsPanel) content() fyne.CanvasObject {
 	browseBtn := widget.NewButtonWithIcon("Browse…", theme.FolderOpenIcon(), p.browseJournalDir)
 	browseBtn.Importance = widget.LowImportance
 	journalRow := container.NewBorder(nil, nil, nil, browseBtn, p.journalDir)
@@ -507,15 +504,6 @@ func (p *settingsPanel) content(frontier *frontierPanel) fyne.CanvasObject {
 		subhead("Inara"), inaraRow,
 	)
 
-	// The Frontier cAPI card is no longer rendered: SrvSurvey doesn't
-	// use cAPI at all and treats ravencolonial as the authoritative
-	// source of FC cargo state. We followed the same path after
-	// repeatedly hitting cAPI staleness / double-count bugs. The
-	// frontierPanel + Sign-in OAuth code is still compiled in case
-	// future non-cargo features need cAPI access; just not shown.
-	_ = frontier
-	_ = p.frontierCAPIEnabled
-
 	saveRow := container.NewBorder(nil, nil, nil, p.save, p.notice)
 
 	body := container.NewVBox(
@@ -543,7 +531,6 @@ func (p *settingsPanel) doSave() {
 		InaraEnabled:        p.inaraEnabled.Checked,
 		InaraAPIKey:         p.inaraKey.Text,
 		InaraAppName:        strings.TrimSpace(p.inaraAppName.Text),
-		FrontierCAPIEnabled: p.frontierCAPIEnabled.Checked,
 	}
 	go func() {
 		err := p.srv.ApplyConfig(newCfg)

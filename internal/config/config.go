@@ -77,15 +77,6 @@ type Config struct {
 	// own Inara dev relationship can set their registered app name here.
 	// Empty defaults to the shipped value.
 	InaraAppName string `toml:"inara_app_name"`
-
-	// FrontierClientID overrides the shipped default OAuth client_id —
-	// useful if Frontier ever revokes the default. Leave empty to use
-	// the baked-in value.
-	FrontierClientID string `toml:"frontier_client_id"`
-	// FrontierCAPIEnabled controls whether we poll the cAPI /fleetcarrier
-	// endpoint and use its data as the FC inventory ground-truth. Off by
-	// default so users opt in to OAuth.
-	FrontierCAPIEnabled bool `toml:"frontier_capi_enabled"`
 }
 
 // Default returns a Config with the canonical defaults filled in. The defaults

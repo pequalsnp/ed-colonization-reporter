@@ -13,8 +13,6 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
-	"os"
-	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -24,7 +22,6 @@ import (
 	"github.com/pequalsnp/ed-colonization-reporter/internal/destinations/eddn"
 	"github.com/pequalsnp/ed-colonization-reporter/internal/destinations/edsm"
 	"github.com/pequalsnp/ed-colonization-reporter/internal/destinations/inara"
-	"github.com/pequalsnp/ed-colonization-reporter/internal/frontier"
 	"github.com/pequalsnp/ed-colonization-reporter/internal/journal"
 	"github.com/pequalsnp/ed-colonization-reporter/internal/ravencolonial"
 	"github.com/pequalsnp/ed-colonization-reporter/internal/reporter"
@@ -54,20 +51,6 @@ type Server struct {
 	inara   *inara.Uploader
 	mux     *destinations.Multiplex
 
-	frontierFlow    *frontier.FlowManager
-	frontierCAPI    *frontier.CAPI
-	frontierStore   frontier.TokenStore
-	frontierTrigger chan struct{} // buffered(1): kick the cAPI poller
-
-	// liveModeCh is closed by the tailer (via OnLiveMode) once it has
-	// transitioned out of backfill replay. runFrontierCAPISync waits on
-	// it before the first cAPI fetch so the anchor (LastCarrierStatsAt)
-	// reflects every CarrierStats event already in the journal — anchor
-	// reached during partial backfill leaves the watermark too early
-	// and causes deltas already in cAPI's snapshot to be re-applied.
-	liveModeCh   chan struct{}
-	liveModeOnce sync.Once
-
 	// lastEventAt is the wall-clock time (unix nanos) of the most
 	// recent journal event the tailer handed to the multiplex.
 	// Atomic for lock-free reads from the GUI's liveness indicator.
@@ -83,11 +66,6 @@ type Server struct {
 	// reading. Optional; nil if open failed.
 	activityLog *activityFileLogger
 
-	// FC inventory cache now lives in state.Session so reporter-side
-	// delta updates (CargoTransfer, MarketBuy/Sell) and the cAPI poll
-	// share storage. See Session.{SetFCCargo,ApplyFCCargoDelta,
-	// FCCargoAggregate}.
-
 	hub      *statusHub
 	listener net.Listener
 	srv      *http.Server
@@ -101,19 +79,10 @@ type Server struct {
 // on disk), so the GUI can decide whether to show a welcome dialog.
 func New(cfg config.Config) *Server {
 	return &Server{
-		cfg:             cfg,
-		hub:             newStatusHub(),
-		frontierTrigger: make(chan struct{}, 1),
-		liveModeCh:      make(chan struct{}),
-		startedAt:       time.Now(),
+		cfg:       cfg,
+		hub:       newStatusHub(),
+		startedAt: time.Now(),
 	}
-}
-
-// signalLiveMode closes liveModeCh exactly once, regardless of how many
-// times the tailer fires its callback (defensive; the tailer also
-// gates internally, but the boundary contract here is "idempotent").
-func (s *Server) signalLiveMode() {
-	s.liveModeOnce.Do(func() { close(s.liveModeCh) })
 }
 
 // SetFirstRun records that this launch found no pre-existing config.
@@ -121,16 +90,6 @@ func (s *Server) SetFirstRun(b bool) { s.firstRun = b }
 
 // FirstRun reports whether the app started without a pre-existing config.
 func (s *Server) FirstRun() bool { return s.firstRun }
-
-// kickFrontierSync requests an immediate cAPI poll on the next tick of
-// the sync goroutine. Non-blocking: if the trigger is already pending,
-// the second kick is dropped.
-func (s *Server) kickFrontierSync() {
-	select {
-	case s.frontierTrigger <- struct{}{}:
-	default:
-	}
-}
 
 // URL returns the http URL the server is listening on. Empty until Start.
 func (s *Server) URL() string {
@@ -145,11 +104,6 @@ func (s *Server) URL() string {
 // SessionStartedAt returns when the backend Server was constructed.
 // Used by the GUI's About dialog to show session uptime.
 func (s *Server) SessionStartedAt() time.Time { return s.startedAt }
-
-// FrontierTokenPath returns the on-disk location of the persisted
-// Frontier OAuth tokens. Useful for support / backup / "where do I
-// reset this?" questions.
-func (s *Server) FrontierTokenPath() string { return resolveFrontierTokenPath() }
 
 // Session exposes the live state.Session so in-process consumers (the
 // Fyne GUI) can read commander, system, dock, etc. directly without
@@ -187,7 +141,6 @@ func (s *Server) ApplyConfig(newCfg config.Config) error {
 		return fmt.Errorf("save config: %w", err)
 	}
 	s.mu.Lock()
-	prevCAPI := s.cfg.FrontierCAPIEnabled
 	s.cfg = newCfg
 	s.client = ravencolonial.New(
 		ravencolonial.WithBaseURL(newCfg.APIBaseURL),
@@ -214,11 +167,7 @@ func (s *Server) ApplyConfig(newCfg config.Config) error {
 	if s.mux != nil {
 		s.mux.Replace(s.rep, s.eddn, s.edsm, s.inara)
 	}
-	shouldKick := newCfg.FrontierCAPIEnabled && !prevCAPI
 	s.mu.Unlock()
-	if shouldKick {
-		s.kickFrontierSync()
-	}
 	s.hub.Publish(reporter.Status{
 		Time: time.Now(), Level: reporter.LevelOK,
 		Message: "Settings saved.",
@@ -240,39 +189,6 @@ func (s *Server) ActiveProjects(ctx context.Context) ([]ravencolonial.Project, s
 	defer cancel()
 	ps, err := s.client.ActiveProjects(cctx, cmdr)
 	return ps, cmdr, err
-}
-
-// FrontierStartSignin generates a new auth URL for the user's browser.
-func (s *Server) FrontierStartSignin() (string, error) {
-	s.mu.Lock()
-	ln := s.listener
-	s.mu.Unlock()
-	if ln == nil {
-		return "", errors.New("server not bound")
-	}
-	addr, ok := ln.Addr().(*net.TCPAddr)
-	if !ok {
-		return "", errors.New("server not bound to TCP")
-	}
-	return s.frontierFlow.Start(addr.Port)
-}
-
-// FrontierStatus reports whether tokens are present + their expiry. The
-// (false, time.Time{}, nil) tuple means "not signed in."
-func (s *Server) FrontierStatus() (signedIn bool, expiresAt time.Time, expired bool) {
-	tok, err := s.frontierStore.Load()
-	if err != nil || tok == nil || tok.AccessToken == "" {
-		return false, time.Time{}, false
-	}
-	return true, tok.ExpiresAt, tok.Expired()
-}
-
-// FrontierClientID returns the OAuth client_id currently in use.
-func (s *Server) FrontierClientID() string {
-	if s.frontierFlow == nil {
-		return ""
-	}
-	return s.frontierFlow.ClientID
 }
 
 // runActivityFileLog drains the statusHub to the file-backed logger
@@ -308,23 +224,6 @@ func (s *Server) LastEventAt() time.Time {
 	return time.Time{}
 }
 
-// SetFCInventory is called by the cAPI sync goroutine after a successful
-// /fleetcarrier fetch. The snapshot is anchored to the most recent
-// CarrierStats timestamp we've seen — Frontier's cAPI returns state
-// aligned with the game's CarrierStats checkpoint, which can be 30+
-// min stale. Journal deltas with timestamps AFTER this watermark stack
-// on top; older ones are presumed already reflected in the snapshot
-// and skipped (see state.Session.ApplyFCCargoDelta).
-func (s *Server) SetFCInventory(name string, cargo ravencolonial.Cargo) {
-	for _, c := range s.session.OwnedCarriers() {
-		if c.Name == name || c.Callsign == name {
-			anchor := s.session.LastCarrierStatsAt(c.MarketID)
-			s.session.SetFCCargo(c.MarketID, map[string]int(cargo), anchor)
-			return
-		}
-	}
-}
-
 // LastShipCargo returns the current ship cargo manifest plus the
 // timestamp it was last refreshed. Reads from state.Session, populated
 // by every journal Cargo event.
@@ -342,8 +241,8 @@ func (s *Server) CurrentMarket() (station string, stock map[string]int, at time.
 
 // LastFCInventory returns the aggregated cargo across all owned FCs
 // (in practice: the single one) plus the most-recent carrier name and
-// update time. Reads from state.Session, so callers see deltas applied
-// between cAPI polls.
+// update time. Reads from state.Session, populated by RC GET at boot
+// and live deltas.
 func (s *Server) LastFCInventory() (name string, cargo ravencolonial.Cargo, at time.Time) {
 	n, c, t := s.session.FCCargoAggregate()
 	if c == nil {
@@ -354,89 +253,6 @@ func (s *Server) LastFCInventory() (name string, cargo ravencolonial.Cargo, at t
 		out[k] = v
 	}
 	return n, out, t
-}
-
-// HealRCFromCAPI POSTs the local FC cargo cache to ravencolonial as an
-// OverwriteCarrierCargo, replacing whatever cargo state RC holds.
-//
-// The local cache is what the GUI displays: cAPI's last snapshot plus
-// any live deltas applied since (CargoTransfer / MarketBuy / MarketSell
-// / Market.json). So this is "push what I'm showing you to RC" — no
-// fresh cAPI fetch needed (which would hit the 15-min cooldown).
-//
-// Use case: RC's per-FC cargo has drifted from reality (e.g. previous
-// versions of this app sent cargo: {} on PUT and wiped it). After this
-// call, RC matches the local cache; live deltas continue from there.
-func (s *Server) HealRCFromCAPI(ctx context.Context) (cargo ravencolonial.Cargo, units int, err error) {
-	// We need a MarketID. Try the owned carriers list first; fall back
-	// to one fresh cAPI lookup ONLY if we don't know one yet (rare —
-	// usually CarrierStats has fired by now).
-	owned := s.session.OwnedCarriers()
-	var marketID int64
-	var callsign string
-	for _, c := range owned {
-		if c.MarketID != 0 {
-			marketID = c.MarketID
-			callsign = c.Callsign
-			break
-		}
-	}
-	if marketID == 0 {
-		if s.frontierCAPI == nil || !s.frontierCAPI.HasTokens(ctx) {
-			return nil, 0, errors.New("no Fleet Carrier known yet — dock at it once so CarrierStats fires, or sign in to cAPI")
-		}
-		fc, ferr := s.frontierCAPI.FleetCarrier(ctx)
-		if ferr != nil {
-			return nil, 0, fmt.Errorf("locating FC via cAPI: %w", ferr)
-		}
-		marketID = fc.MarketID
-		callsign = fc.Name.Callsign
-	}
-	if marketID == 0 {
-		return nil, 0, errors.New("no MarketID resolved")
-	}
-
-	local, _ := s.session.FCCargo(marketID)
-	if len(local) == 0 {
-		return nil, 0, errors.New("local FC cache is empty; nothing to push. Try Refresh FC now first")
-	}
-
-	cargo = ravencolonial.Cargo{}
-	for k, v := range local {
-		if v > 0 {
-			cargo[k] = v
-		}
-	}
-	for _, n := range cargo {
-		units += n
-	}
-	if err := s.client.OverwriteCarrierCargo(ctx, marketID, cargo); err != nil {
-		return cargo, units, fmt.Errorf("RC overwrite: %w", err)
-	}
-	s.hub.Publish(reporter.Status{
-		Time: time.Now(), Level: reporter.LevelOK,
-		Message: fmt.Sprintf("Healed RC for FC %s — overwrote %d commodities, %d units from local cache", callsign, len(cargo), units),
-	})
-	return cargo, units, nil
-}
-
-// ForceFCSync kicks the cAPI /fleetcarrier poller. Honors the 15-min
-// server-side cooldown — if we already polled recently, the next call
-// will silently no-op (cAPI returns ErrFleetCarrierRateLimited which
-// the poller swallows). Exposed for the GUI's "Refresh FC now" button.
-func (s *Server) ForceFCSync() { s.kickFrontierSync() }
-
-// FrontierSignout discards stored tokens.
-func (s *Server) FrontierSignout() error {
-	if err := s.frontierStore.Clear(); err != nil {
-		return err
-	}
-	s.frontierCAPI.SetTokens(nil)
-	s.hub.Publish(reporter.Status{
-		Time: time.Now(), Level: reporter.LevelInfo,
-		Message: "Signed out of Frontier",
-	})
-	return nil
 }
 
 // Start binds the listener, wires the reporter/tailer, and serves until ctx
@@ -485,18 +301,6 @@ func (s *Server) Start(ctx context.Context) error {
 	// Spin up the Inara batch flusher. Runs even when Inara is disabled;
 	// Flush() is a no-op without an API key.
 	s.inara.StartBackground(tailerCtx, 0)
-	// Background poller for the Frontier cAPI /fleetcarrier endpoint.
-	// cAPI polling for FC cargo is disabled: SrvSurvey treats RC as the
-	// authoritative source of FC state (no cAPI integration at all),
-	// and our attempts to use cAPI as a freshness boost introduced more
-	// staleness/double-count bugs than they fixed. The Frontier OAuth
-	// + token storage code stays compiled-in for now in case we want
-	// it back for non-cargo features. Cargo state now flows: live
-	// journal CargoTransfer / MarketBuy / MarketSell PATCHes RC and
-	// the local cache; Market.json on the Market event POSTs an
-	// overwrite to RC and seeds the local cache. seedFCFromRC pulls
-	// from RC at boot when CarrierStats fires.
-	_ = s.runFrontierCAPISync // keep the function compiled (referenced)
 
 	if s.OpenBrowser != nil {
 		s.OpenBrowser(s.URL())
@@ -563,29 +367,6 @@ func (s *Server) initSessionAndReporter() error {
 	s.inara.SetAPIKey(s.cfg.InaraAPIKey)
 	s.inara.SetEnabled(s.cfg.InaraEnabled)
 
-	// Frontier OAuth + cAPI. Token file lives next to the regular config so
-	// it inherits user-only directory permissions.
-	tokenPath := resolveFrontierTokenPath()
-	s.frontierStore = frontier.NewFileTokenStore(tokenPath)
-	oauth := frontier.NewClient()
-	clientID := s.cfg.FrontierClientID
-	if clientID == "" {
-		clientID = frontier.DefaultClientID
-	}
-	s.frontierCAPI = frontier.NewCAPI(oauth, clientID, s.frontierStore)
-	s.frontierFlow = frontier.NewFlowManager(oauth, s.frontierStore)
-	s.frontierFlow.ClientID = clientID
-	s.frontierFlow.OnTokens = func(t *frontier.Tokens) {
-		s.frontierCAPI.SetTokens(t)
-		s.hub.Publish(reporter.Status{
-			Time: time.Now(), Level: reporter.LevelOK,
-			Message: "Signed in with Frontier (cAPI tokens cached)",
-		})
-		// Trigger an immediate FC sync — the user just signed in and is
-		// presumably eager to see ravencolonial reflect their FC state.
-		s.kickFrontierSync()
-	}
-
 	s.mux = destinations.NewMultiplex(s.rep, s.eddn, s.edsm, s.inara)
 	s.mux.OnError = func(name string, err error) {
 		// Don't surface per-event errors here — destinations emit their own
@@ -594,17 +375,6 @@ func (s *Server) initSessionAndReporter() error {
 		_ = err
 	}
 	return nil
-}
-
-// resolveFrontierTokenPath returns the file path for the Frontier OAuth
-// token store. Sits in the same XDG/AppData directory as config.toml so
-// the parent dir's perms cover both files.
-func resolveFrontierTokenPath() string {
-	dir, err := os.UserConfigDir()
-	if err != nil {
-		return filepath.Join(os.TempDir(), "edcolreport-frontier-tokens.json")
-	}
-	return filepath.Join(dir, "ed-colonization-reporter", "frontier_tokens.json")
 }
 
 // parseLevel maps a string log level to the reporter.Level enum.
@@ -661,9 +431,8 @@ func (s *Server) runTailer(ctx context.Context) {
 	})
 
 	tl := &journal.Tailer{
-		Dir:        dir,
-		StartAt:    startAt,
-		OnLiveMode: s.signalLiveMode,
+		Dir:     dir,
+		StartAt: startAt,
 	}
 	events := make(chan journal.Raw, 64)
 	tailErr := make(chan error, 1)

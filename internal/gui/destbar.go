@@ -54,7 +54,7 @@ func newDestBar(srv *web.Server) *destBar {
 	b := &destBar{srv: srv, chips: map[string]*destChip{}, health: map[string]destHealth{}}
 
 	row := container.NewHBox()
-	for _, name := range []string{"RC", "FC sync", "EDDN", "EDSM", "Inara", "cAPI"} {
+	for _, name := range []string{"RC", "FC sync", "EDDN", "EDSM", "Inara"} {
 		c := newDestChip(name)
 		b.chips[name] = c
 		row.Add(c.container)
@@ -182,8 +182,6 @@ func matchDestination(msg string) string {
 	case strings.HasPrefix(msg, "Synced FC ") || strings.HasPrefix(msg, "Sync FC ") ||
 		strings.HasPrefix(msg, "FC cargo "):
 		return "FC sync"
-	case strings.HasPrefix(msg, "cAPI"):
-		return "cAPI"
 	case strings.HasPrefix(msg, "Published Fleet Carrier") ||
 		strings.HasPrefix(msg, "Created ravencolonial") ||
 		strings.HasPrefix(msg, "Reported depot") ||
@@ -209,7 +207,6 @@ func healthColor(h destHealth, defaultColor color.Color) color.Color {
 
 func (b *destBar) update() {
 	cfg := b.srv.Config()
-	signedIn, _, _ := b.srv.FrontierStatus()
 
 	// Per-destination health from the statusHub classifier.
 	b.healthMu.Lock()
@@ -233,7 +230,6 @@ func (b *destBar) update() {
 		b.chips["EDDN"].setEnabled(cfg.EDDNEnabled, healthColor(health["EDDN"], edStatusInfo))
 		b.chips["EDSM"].setEnabled(cfg.EDSMEnabled && cfg.EDSMAPIKey != "", healthColor(health["EDSM"], edStatusInfo))
 		b.chips["Inara"].setEnabled(cfg.InaraEnabled && cfg.InaraAPIKey != "", healthColor(health["Inara"], edStatusInfo))
-		b.chips["cAPI"].setEnabled(cfg.FrontierCAPIEnabled && signedIn, healthColor(health["cAPI"], edOrange))
 
 		if u := b.srv.URL(); u != "" {
 			b.url.Text = u
