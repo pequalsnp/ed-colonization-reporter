@@ -332,6 +332,14 @@ func (s *Server) LastShipCargo() (cargo map[string]int, at time.Time) {
 	return s.session.ShipCargo()
 }
 
+// CurrentMarket returns the {commodity: Stock} map and station name of
+// the market the player most recently interacted with (commodities-
+// market UI opened), or ("", nil, zero) when none has been seen this
+// session / the player has undocked since.
+func (s *Server) CurrentMarket() (station string, stock map[string]int, at time.Time) {
+	return s.session.CurrentMarket()
+}
+
 // LastFCInventory returns the aggregated cargo across all owned FCs
 // (in practice: the single one) plus the most-recent carrier name and
 // update time. Reads from state.Session, so callers see deltas applied

@@ -458,12 +458,19 @@ func (panel *projectsPanel) buildProjectCard(p ravencolonial.Project, expanded b
 		if expanded {
 			fcName, fcInv, _ := panel.srv.LastFCInventory()
 			shipInv, _ := panel.srv.LastShipCargo()
-			if fcName != "" {
-				heading := canvas.NewText(fmt.Sprintf("Against your Fleet Carrier (%s) + ship cargo:", fcName), edFgMuted)
-				heading.TextSize = 11
-				body.Add(container.NewPadded(heading))
+			station, marketStock, _ := panel.srv.CurrentMarket()
+			heading := "Outstanding commodities:"
+			if fcName != "" && station != "" {
+				heading = fmt.Sprintf("FC %s · ship cargo · buyable at %s (highlighted):", fcName, station)
+			} else if fcName != "" {
+				heading = fmt.Sprintf("FC %s · ship cargo:", fcName)
+			} else if station != "" {
+				heading = fmt.Sprintf("Buyable at %s (highlighted):", station)
 			}
-			body.Add(allCommoditiesGrid(p.Commodities, fcInv, shipInv))
+			h := canvas.NewText(heading, edFgMuted)
+			h.TextSize = 11
+			body.Add(container.NewPadded(h))
+			body.Add(allCommoditiesGrid(p.Commodities, fcInv, shipInv, marketStock))
 		} else {
 			body.Add(commoditiesLine(p.Commodities))
 		}
@@ -503,33 +510,52 @@ func (panel *projectsPanel) buildProjectCard(p ravencolonial.Project, expanded b
 	return container.NewPadded(container.NewStack(bg, card))
 }
 
-// allCommoditiesGrid renders every outstanding commodity sorted by
-// need-quantity desc, with columns: Need · FC · Ship · Diff · Name.
-// The FC/Ship/Diff columns are omitted when fcInventory is nil (cAPI
-// not signed in or never fetched) — in that case we don't have FC
-// data and a ship-only diff would be misleading. Two grid columns
-// wide so 20+ commodities don't make the card absurdly tall.
+// allCommoditiesGrid renders every outstanding commodity grouped by
+// in-game commodity-market section (Metals, Chemicals, Technology, …).
+// Within each group the rows are sorted by need-quantity desc.
+// Columns: Need · FC · Ship · Diff · Name.
 //
-// shipInventory may be nil; when present, the Diff column shows
-// (FC + Ship) - Need so the user can see whether the combined hold
-// is enough to satisfy the outstanding need.
-func allCommoditiesGrid(commodities map[string]int, fcInventory, shipInventory map[string]int) fyne.CanvasObject {
+// The FC/Ship/Diff columns are omitted when fcInventory is nil — in
+// that case we don't have FC data and a ship-only diff would be
+// misleading.
+//
+// shipInventory may be nil; when present, Diff shows (FC + Ship) - Need.
+//
+// marketStock may be nil; when populated (the player is docked at a
+// market with the commodities UI opened), commodities buyable from
+// that market are highlighted via a brighter accent color so the user
+// can spot them at a glance.
+func allCommoditiesGrid(commodities, fcInventory, shipInventory, marketStock map[string]int) fyne.CanvasObject {
 	entries := topCommodities(commodities, 1000)
 	if len(entries) == 0 {
 		return container.NewWithoutLayout()
 	}
 
-	rows := container.New(layout.NewGridLayout(2))
-	header := commoditiesHeader(fcInventory != nil)
-	rows.Add(header)
-	// Add an empty cell so the header doesn't push the first commodity
-	// into the right column.
-	rows.Add(commoditiesHeader(fcInventory != nil))
-
-	for _, c := range entries {
-		rows.Add(commodityRow(c, fcInventory, shipInventory))
+	byCat := map[string][]commodityEntry{}
+	for _, e := range entries {
+		cat := CategoryFor(e.Symbol)
+		byCat[cat] = append(byCat[cat], e)
 	}
-	return rows
+
+	sections := container.NewVBox()
+	sections.Add(commoditiesHeader(fcInventory != nil))
+	for _, cat := range categoryOrder {
+		rows, ok := byCat[cat]
+		if !ok || len(rows) == 0 {
+			continue
+		}
+		secHeader := canvas.NewText(cat, edStatusInfo)
+		secHeader.TextSize = 11
+		secHeader.TextStyle = fyne.TextStyle{Bold: true}
+		sections.Add(container.NewPadded(secHeader))
+
+		grid := container.New(layout.NewGridLayout(2))
+		for _, c := range rows {
+			grid.Add(commodityRow(c, fcInventory, shipInventory, marketStock))
+		}
+		sections.Add(grid)
+	}
+	return sections
 }
 
 func commoditiesHeader(showFC bool) fyne.CanvasObject {
@@ -549,7 +575,7 @@ func commoditiesHeader(showFC bool) fyne.CanvasObject {
 	return container.NewHBox(need, fc, ship, diff, header("COMMODITY"))
 }
 
-func commodityRow(c commodityEntry, fcInventory, shipInventory map[string]int) fyne.CanvasObject {
+func commodityRow(c commodityEntry, fcInventory, shipInventory, marketStock map[string]int) fyne.CanvasObject {
 	cellNum := func(value string, fg color.Color) fyne.CanvasObject {
 		t := canvas.NewText(value, fg)
 		t.TextSize = 12
@@ -558,9 +584,21 @@ func commodityRow(c commodityEntry, fcInventory, shipInventory map[string]int) f
 		return container.NewGridWrap(fyne.NewSize(56, 18), t)
 	}
 
+	// Buyable-here highlight: when the commodity is in stock at the
+	// market the player has open, use the accent color instead of
+	// muted. Visible at a glance without taking extra column space.
+	nameColor := edFgMuted
+	buyable := marketStock != nil && marketStock[c.Symbol] > 0
+	if buyable {
+		nameColor = edOrange
+	}
+
 	need := cellNum(humanCount(c.Count), edFg)
-	name := canvas.NewText(PrettifyCommodity(c.Symbol), edFgMuted)
+	name := canvas.NewText(PrettifyCommodity(c.Symbol), nameColor)
 	name.TextSize = 12
+	if buyable {
+		name.TextStyle = fyne.TextStyle{Bold: true}
+	}
 
 	if fcInventory == nil {
 		return container.NewHBox(need, name)

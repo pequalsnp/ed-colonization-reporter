@@ -141,24 +141,45 @@ func TestHandleMarket_SyncsCargoForOwnedFC(t *testing.T) {
 	}
 }
 
-func TestHandleMarket_SkipsNonOwnedFC(t *testing.T) {
+func TestHandleMarket_NonOwnedFCDoesNotPOSTButRecordsStock(t *testing.T) {
+	// Market events at any station with a commodity market populate
+	// Session.currentMarketStock so the GUI can highlight commodities
+	// the player can buy locally. The OverwriteCarrierCargo POST is
+	// only fired when the market IS one of the commander's own FCs.
 	sess := state.New()
 	api := &fakeAPI{}
 	r := New(api, sess)
 	r.JournalDir = "/fake"
 	r.readMarketFile = func(dir string) (*journal.MarketFile, error) {
-		t.Fatal("should not be called for non-owned market")
-		return nil, nil
+		return &journal.MarketFile{
+			MarketID:    99,
+			StationName: "Carroll City",
+			Items: []journal.MarketItem{
+				{Name: "$steel_name;", Stock: 1500},
+				{Name: "$titanium_name;", Stock: 0},
+			},
+		}, nil
 	}
 	raw := mustRaw(t, journal.EventMarket, map[string]any{
 		"MarketID":    99,
-		"StationType": "FleetCarrier",
+		"StationName": "Carroll City",
+		"StationType": "Coriolis",
 	})
 	if err := r.HandleEvent(context.Background(), raw); err != nil {
 		t.Fatalf("HandleEvent: %v", err)
 	}
 	if len(api.fcCargo) != 0 {
-		t.Errorf("should not have synced for non-owned market")
+		t.Errorf("should not OverwriteCarrierCargo for non-owned market")
+	}
+	station, stock, _ := sess.CurrentMarket()
+	if station != "Carroll City" {
+		t.Errorf("station = %q, want Carroll City", station)
+	}
+	if stock["steel"] != 1500 {
+		t.Errorf("steel stock = %d, want 1500", stock["steel"])
+	}
+	if _, ok := stock["titanium"]; ok {
+		t.Errorf("titanium had Stock=0 and should have been dropped")
 	}
 }
 

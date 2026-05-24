@@ -191,6 +191,10 @@ func (r *Reporter) HandleEvent(ctx context.Context, raw journal.Raw) error {
 		// arrive shortly after dock already carry the data we need.
 	case journal.EventUndocked:
 		r.Session.SetUndocked()
+		// Clear the "buyable at current market" highlight when leaving
+		// the station — Market.json is not refreshed by the game until
+		// the player opens another market.
+		r.Session.SetCurrentMarket("", nil)
 	case journal.EventColonisationConstructionDepot:
 		var e journal.ColonisationConstructionDepotEvent
 		if err := json.Unmarshal(raw.Payload, &e); err != nil {
@@ -647,11 +651,7 @@ func (r *Reporter) seedFCFromRC(ctx context.Context, marketID int64) {
 }
 
 func (r *Reporter) handleMarket(ctx context.Context, e journal.MarketEvent) error {
-	if !r.Session.IsOwnedCarrier(e.MarketID) {
-		return nil // not my FC; nothing to sync
-	}
 	if r.JournalDir == "" {
-		r.emit(LevelWarn, "FC cargo sync: journal dir not set; skipping")
 		return nil
 	}
 	read := r.readMarketFile
@@ -669,11 +669,24 @@ func (r *Reporter) handleMarket(ctx context.Context, e journal.MarketEvent) erro
 		r.emit(LevelInfo, "Market.json MarketID (%d) doesn't match event (%d); skipping", mf.MarketID, e.MarketID)
 		return nil
 	}
+
+	// Always record the per-commodity Stock at the current market so
+	// the Projects panel can highlight "you can buy this here" rows.
+	// This applies to ANY station with a commodity market, not just
+	// the player's FC.
+	stock := stockFromMarket(mf)
+	r.Session.SetCurrentMarket(e.StationName, stock)
+
+	// The cargo-sync path only applies when the market is the
+	// player's own Fleet Carrier — RC's per-FC cargo record is
+	// what's being overwritten.
+	if !r.Session.IsOwnedCarrier(e.MarketID) {
+		return nil
+	}
 	cargo := cargoFromMarket(mf)
-	// Even when ravencolonial rejects (or is unauthenticated), keep the
-	// local cache up to date so the GUI's FC column is meaningful.
-	// Market.json is a live snapshot — stamp it with the event's
-	// timestamp so subsequent deltas only apply if they're newer.
+	// Keep the local FC cache in sync regardless of network success —
+	// Market.json is a live snapshot. Timestamp the watermark so any
+	// older deltas in flight don't clobber it.
 	r.Session.SetFCCargo(e.MarketID, mapStringInt(cargo), e.Timestamp)
 	if err := r.API.OverwriteCarrierCargo(ctx, e.MarketID, cargo); err != nil {
 		if errors.Is(err, ravencolonial.ErrNoAPIKey) {
@@ -684,6 +697,27 @@ func (r *Reporter) handleMarket(ctx context.Context, e journal.MarketEvent) erro
 	}
 	r.emit(LevelOK, "Synced FC cargo (%d commodities, %d total units)", len(cargo), sumValues(cargo))
 	return nil
+}
+
+// stockFromMarket builds a {commodity_symbol: stock} map for the player-
+// facing "buyable here" highlight. Unlike cargoFromMarket, this is keyed
+// by what the market HAS for sale (Stock > 0), not by FC inventory.
+func stockFromMarket(mf *journal.MarketFile) map[string]int {
+	out := make(map[string]int, len(mf.Items))
+	for _, it := range mf.Items {
+		if it.Stock <= 0 {
+			continue
+		}
+		key := NormalizeCommodity(it.Name)
+		if key == "" {
+			key = NormalizeCommodity(it.NameLocalised)
+		}
+		if key == "" {
+			continue
+		}
+		out[key] += it.Stock
+	}
+	return out
 }
 
 // cargoFromMarket builds the {commodity_symbol: stock} map the API wants.

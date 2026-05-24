@@ -65,6 +65,15 @@ type Session struct {
 	// inventory change, so this stays current without explicit polling.
 	shipCargo   map[string]int
 	shipCargoAt time.Time
+
+	// currentMarketStock is the per-commodity Stock map from the
+	// Market.json file at the station the player most recently opened
+	// the commodity market at. Populated on the Market journal event;
+	// cleared on Undocked. Drives the "you can buy this here"
+	// highlight in the Projects panel.
+	currentMarketStock   map[string]int
+	currentMarketStation string
+	currentMarketAt      time.Time
 }
 
 // OwnedCarrier is the minimal record we need about a commander's FC to sync it.
@@ -121,6 +130,39 @@ func (s *Session) ShipCargo() (map[string]int, time.Time) {
 		cp[k] = v
 	}
 	return cp, s.shipCargoAt
+}
+
+// SetCurrentMarket records the per-commodity Stock map from a Market.json
+// read. station is the station name for UI labeling. Pass an empty
+// stock map (or nil) to clear — e.g. on Undocked.
+func (s *Session) SetCurrentMarket(station string, stock map[string]int) {
+	cp := make(map[string]int, len(stock))
+	for k, v := range stock {
+		if v > 0 {
+			cp[k] = v
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.currentMarketStock = cp
+	s.currentMarketStation = station
+	s.currentMarketAt = time.Now()
+}
+
+// CurrentMarket returns the station name and per-commodity Stock map
+// from the most recent Market.json read. Returns ("", nil, zero) if
+// no Market.json has been seen this session.
+func (s *Session) CurrentMarket() (station string, stock map[string]int, at time.Time) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if len(s.currentMarketStock) == 0 {
+		return s.currentMarketStation, nil, s.currentMarketAt
+	}
+	cp := make(map[string]int, len(s.currentMarketStock))
+	for k, v := range s.currentMarketStock {
+		cp[k] = v
+	}
+	return s.currentMarketStation, cp, s.currentMarketAt
 }
 
 // SetCommander records the commander identity.
