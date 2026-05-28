@@ -46,7 +46,7 @@ modules:
         GOTOOLCHAIN: local
         GOFLAGS: '-mod=vendor'
     build-commands:
-      - go build -trimpath -ldflags="-s -w -X main.version=v0.2.0"
+      - go build -trimpath -ldflags="-s -w -X main.version=v0.3.0"
         -o /app/bin/edcolreport ./cmd/edcolreport
       - install -Dm644 packaging/ca.thegalloways.edcolreport.desktop
         /app/share/applications/ca.thegalloways.edcolreport.desktop
@@ -57,7 +57,7 @@ modules:
     sources:
       - type: git
         url: https://github.com/pequalsnp/ed-colonization-reporter.git
-        tag: v0.2.0
+        tag: v0.3.0
         # Flathub requires a commit pin alongside the tag; fill in at submission:
         # commit: 0000000000000000000000000000000000000000
       # Generated — reconstructs vendor/ offline (it also pulls in modules.txt).

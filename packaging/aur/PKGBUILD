@@ -3,7 +3,7 @@ pkgname=edcolreport
 # Set to the release's semver. NOTE: AUR pkgver cannot contain a hyphen, so
 # for a pre-release tag like v0.2.0-alpha use _tag below to point at the real
 # tag and keep pkgver hyphen-free (e.g. pkgver=0.2.0alpha, _tag=v0.2.0-alpha).
-pkgver=0.2.0
+pkgver=0.3.0
 pkgrel=1
 _tag="v${pkgver}"
 pkgdesc="Report Elite Dangerous colonization progress to ravencolonial.com"

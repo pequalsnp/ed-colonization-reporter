@@ -67,7 +67,7 @@ flatpak override --user --filesystem="$HOME/Games/elite-dangerous:ro" ca.thegall
 Flathub builds happen in a separate `flathub/ca.thegalloways.edcolreport` repo,
 not this one. Before opening the submission PR:
 
-1. Cut a release tag (e.g. `v0.2.0`) and set both `tag:` and `commit:` on the
+1. Cut a release tag (e.g. `v0.3.0`) and set both `tag:` and `commit:` on the
    git source in the manifest (Flathub requires the commit pin).
 2. Bump the `-X main.version=` ldflag and the `<release>` entry in the metainfo
    to match the tag.
