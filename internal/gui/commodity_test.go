@@ -4,13 +4,21 @@ import "testing"
 
 func TestPrettifyCommodity(t *testing.T) {
 	cases := map[string]string{
-		"cmmcomposite":        "CMM Composite",
-		"titanium":            "Titanium",
-		"ceramic_composites":  "Ceramic Composites",
-		"liquidoxygen":        "Liquid Oxygen",
-		"surface_stabilisers": "Surface Stabilisers",
-		"non_lethal_weapons":  "Non Lethal Weapons", // underscore-form, not in override table — title-cased
-		"":                    "",
+		"cmmcomposite":              "CMM Composite",
+		"titanium":                  "Titanium",
+		"ceramic_composites":        "Ceramic Composites",
+		"liquidoxygen":              "Liquid Oxygen",
+		"surface_stabilisers":       "Surface Stabilisers",
+		"non_lethal_weapons":        "Non Lethal Weapons", // underscore-form, not in override table — title-cased
+		"insulatingmembrane":        "Insulating Membrane",
+		"geologicalequipment":       "Geological Equipment",
+		"bioreducinglichen":         "Bio-Reducing Lichen",
+		"resonatingseparators":      "Resonating Separators",
+		"hazardousenvironmentsuits": "H.E. Suits",
+		"hesuits":                   "H.E. Suits",
+		"mutomimager":               "Muon Imager",
+		"muonimager":                "Muon Imager",
+		"":                          "",
 	}
 	for in, want := range cases {
 		if got := PrettifyCommodity(in); got != want {

@@ -14,26 +14,38 @@ import (
 // This is intentionally a small static table; the universe of journal
 // commodity symbols is finite and Frontier doesn't add new ones often.
 var commodityNameOverrides = map[string]string{
-	"cmmcomposite":      "CMM Composite",
-	"hydrogen_fuel":     "Hydrogen Fuel",
-	"surfacestabilisers": "Surface Stabilisers",
+	"cmmcomposite":               "CMM Composite",
+	"hydrogen_fuel":              "Hydrogen Fuel",
+	"surfacestabilisers":         "Surface Stabilisers",
 	"medicaldiagnosticequipment": "Medical Diagnostic Equipment",
-	"powergenerators":   "Power Generators",
-	"foodcartridges":    "Food Cartridges",
-	"fruitandvegetables": "Fruit and Vegetables",
-	"liquidoxygen":      "Liquid Oxygen",
-	"survivalequipment": "Survival Equipment",
-	"evacuationshelter": "Evacuation Shelter",
-	"buildingfabricators": "Building Fabricators",
-	"emergencypowercells": "Emergency Power Cells",
-	"computercomponents": "Computer Components",
-	"landenrichmentsystems": "Land Enrichment Systems",
-	"medicaldiagnosticeqpt": "Medical Diagnostic Equipment",
-	"structuralregulators": "Structural Regulators",
-	"nonlethalweapons":  "Non-Lethal Weapons",
-	"ceramiccomposites": "Ceramic Composites",
-	"semiconductors":    "Semiconductors",
-	"superconductors":   "Superconductors",
+	"powergenerators":            "Power Generators",
+	"foodcartridges":             "Food Cartridges",
+	"fruitandvegetables":         "Fruit and Vegetables",
+	"liquidoxygen":               "Liquid Oxygen",
+	"survivalequipment":          "Survival Equipment",
+	"evacuationshelter":          "Evacuation Shelter",
+	"buildingfabricators":        "Building Fabricators",
+	"emergencypowercells":        "Emergency Power Cells",
+	"computercomponents":         "Computer Components",
+	"landenrichmentsystems":      "Land Enrichment Systems",
+	"medicaldiagnosticeqpt":      "Medical Diagnostic Equipment",
+	"structuralregulators":       "Structural Regulators",
+	"nonlethalweapons":           "Non-Lethal Weapons",
+	"ceramiccomposites":          "Ceramic Composites",
+	"semiconductors":             "Semiconductors",
+	"superconductors":            "Superconductors",
+	"insulatingmembrane":         "Insulating Membrane",
+	"geologicalequipment":        "Geological Equipment",
+	"bioreducinglichen":          "Bio-Reducing Lichen",
+	"resonatingseparators":       "Resonating Separators",
+	// RC ships H.E. Suits as "hazardousenvironmentsuits" and Muon Imager
+	// as "mutomimager" (Frontier's odd internal symbol). Cover both the
+	// long-form and short-form symbols since other sources use the shorter
+	// forms.
+	"hazardousenvironmentsuits": "H.E. Suits",
+	"hesuits":                   "H.E. Suits",
+	"mutomimager":               "Muon Imager",
+	"muonimager":                "Muon Imager",
 }
 
 // upperAcronyms are words that should be uppercased on prettification.

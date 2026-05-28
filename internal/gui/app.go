@@ -48,6 +48,7 @@ type App struct {
 
 	statusBar *statusBar
 	projects  *projectsPanel
+	combined  *combinedPanel
 	activity  *activityPanel
 	settings  *settingsPanel
 	destBar   *destBar
@@ -95,6 +96,7 @@ func (a *App) show(ctx context.Context) {
 	a.statusBar = newStatusBar(a.srv.GetVersion())
 	a.projects = newProjectsPanel(a.srv)
 	a.projects.AttachPrefs(a.app.Preferences())
+	a.combined = newCombinedPanel(a.srv)
 	a.activity = newActivityPanel()
 	a.activity.window = a.window
 	a.activity.AttachPrefs(a.app.Preferences())
@@ -103,9 +105,10 @@ func (a *App) show(ctx context.Context) {
 	a.destBar = newDestBar(a.srv)
 
 	projectsTab := container.NewTabItemWithIcon("Projects", theme.GridIcon(), a.projects.content())
+	combinedTab := container.NewTabItemWithIcon("Combined", theme.ListIcon(), a.combined.content())
 	a.activityTab = container.NewTabItemWithIcon("Activity", theme.HistoryIcon(), a.activity.content())
 	settingsTab := container.NewTabItemWithIcon("Settings", theme.SettingsIcon(), a.settings.content())
-	a.tabs = container.NewAppTabs(projectsTab, a.activityTab, settingsTab)
+	a.tabs = container.NewAppTabs(projectsTab, combinedTab, a.activityTab, settingsTab)
 	a.tabs.SetTabLocation(container.TabLocationTop)
 
 	// Restore last-active tab + persist on every switch. Switching to
@@ -174,6 +177,7 @@ func (a *App) show(ctx context.Context) {
 	go a.runStatusBarLoop(subCtx)
 	go a.runActivityLoop(subCtx)
 	go a.projects.runAutoRefresh(subCtx)
+	go a.combined.runAutoRefresh(subCtx)
 	go a.destBar.runLoop(subCtx)
 	go a.runUpdateCheck(subCtx)
 
@@ -221,8 +225,16 @@ func (a *App) maybeShowWelcome() {
 		labelMuted("Closing the window minimises to the tray. Use Ctrl+Q or tray → Quit to actually exit."),
 	)
 	openSettings := widget.NewButton("Open Settings", func() {
-		if a.tabs != nil && len(a.tabs.Items) >= 3 {
-			a.tabs.SelectIndex(2)
+		if a.tabs == nil {
+			return
+		}
+		// Find the Settings tab by name so reordering tabs above doesn't
+		// silently send the user somewhere else.
+		for i, it := range a.tabs.Items {
+			if it.Text == "Settings" {
+				a.tabs.SelectIndex(i)
+				return
+			}
 		}
 	})
 	openSettings.Importance = widget.HighImportance
@@ -725,6 +737,7 @@ func (a *App) registerShortcuts(tabs *container.AppTabs) {
 	bind(fyne.Key1, func() { tabs.SelectIndex(0) })
 	bind(fyne.Key2, func() { tabs.SelectIndex(1) })
 	bind(fyne.Key3, func() { tabs.SelectIndex(2) })
+	bind(fyne.Key4, func() { tabs.SelectIndex(3) })
 	bind(fyne.KeyQ, func() { a.window.Close() })
 
 	// F5 (no modifier) as a refresh alias — matches browser muscle memory.
