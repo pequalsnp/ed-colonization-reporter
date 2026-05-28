@@ -13,7 +13,7 @@ jobs:
   build-linux-amd64:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Fyne build dependencies
         run: |
@@ -23,7 +23,7 @@ jobs:
             libgl1-mesa-dev libxcursor-dev libxrandr-dev \
             libxinerama-dev libxi-dev libxxf86vm-dev xorg-dev
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: '1.24'
 
@@ -36,7 +36,7 @@ jobs:
             -o dist/edcolreport-${GITHUB_REF_NAME}-linux-amd64 \
             ./cmd/edcolreport
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: linux-amd64
           path: dist/
@@ -47,9 +47,9 @@ jobs:
     # are weighted 2x) and avoids cross-platform CI weirdness.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: '1.24'
 
@@ -68,7 +68,7 @@ jobs:
           cp fyne-cross/dist/windows-amd64/edcolreport-${GITHUB_REF_NAME}-windows-amd64.exe dist/ \
             || cp fyne-cross/dist/windows-amd64/*.exe dist/edcolreport-${GITHUB_REF_NAME}-windows-amd64.exe
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: windows-amd64
           path: dist/
@@ -79,9 +79,9 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist-merged
           merge-multiple: true
