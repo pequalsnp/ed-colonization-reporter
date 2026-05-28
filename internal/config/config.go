@@ -52,6 +52,13 @@ type Config struct {
 	// Useful when the app is in autostart and you don't want it to
 	// steal focus during login.
 	StartMinimized bool `toml:"start_minimized"`
+	// CloseToTray keeps the app running in the system tray when the
+	// window is closed, instead of quitting. Default false — closing
+	// the window quits the whole app (and tears down the backend), which
+	// is what most users expect. Only enable this if your desktop's tray
+	// reliably shows the icon, otherwise you'll lose the only way back to
+	// the window.
+	CloseToTray bool `toml:"close_to_tray"`
 
 	// EDDNEnabled turns on uploads to the EDDN community data network
 	// (https://eddn.edcd.io). Default off so users opt in explicitly.

@@ -132,11 +132,18 @@ func (a *App) show(ctx context.Context) {
 	// Menubar — gives the app a real Quit / About / Shortcuts entry point.
 	a.window.SetMainMenu(a.buildMenu(tabs))
 
-	// Close-to-tray: closing the window hides it rather than quitting,
-	// matching common KDE/EDMC behaviour. Use Ctrl+Q or the tray menu
-	// to actually exit.
+	// Window-close behaviour, read live so the Settings toggle takes effect
+	// without a restart. Default: closing the window quits the whole app,
+	// which also tears down the backend (see SetOnStopped below). Opt-in
+	// close-to-tray hides the window instead, keeping the app alive in the
+	// system tray — only sensible when the tray icon reliably shows.
+	// Window.Close() bypasses the intercept, so calling it here is safe.
 	a.window.SetCloseIntercept(func() {
-		a.window.Hide()
+		if a.srv.Config().CloseToTray {
+			a.window.Hide()
+			return
+		}
+		a.window.Close()
 	})
 
 	// Thin orange divider line under the status bar — same trick the ED
@@ -222,7 +229,7 @@ func (a *App) maybeShowWelcome() {
 		labelWrapped("3. (Optional) Sign in with Frontier under Settings → Frontier cAPI for authoritative FC inventory."),
 		labelWrapped("4. (Optional) Enable EDDN / EDSM / Inara uploads if you'd like to contribute to the community trackers."),
 		widget.NewLabel(""),
-		labelMuted("Closing the window minimises to the tray. Use Ctrl+Q or tray → Quit to actually exit."),
+		labelMuted("Closing the window quits the app. Enable \"Close to system tray\" in Settings to keep it running in the tray instead."),
 	)
 	openSettings := widget.NewButton("Open Settings", func() {
 		if a.tabs == nil {

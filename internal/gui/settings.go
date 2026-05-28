@@ -37,11 +37,11 @@ type settingsPanel struct {
 	edsmKey, inaraKey                                     *widget.Entry
 	inaraAppName                                          *widget.Entry
 	replaySession, eddnEnabled, edsmEnabled, inaraEnabled *widget.Check
-	startMinimized                                        *widget.Check
+	startMinimized, closeToTray                           *widget.Check
 
 	pollSeconds *widget.Entry
-	save                                                  *widget.Button
-	notice                                                *canvas.Text
+	save        *widget.Button
+	notice      *canvas.Text
 
 	// journalStatus shows whether the configured (or auto-detected)
 	// journal directory contains any Journal.*.log files.
@@ -80,6 +80,9 @@ func newSettingsPanel(srv *web.Server) *settingsPanel {
 
 	p.startMinimized = widget.NewCheck("Start minimized to system tray", nil)
 	p.startMinimized.SetChecked(cfg.StartMinimized)
+
+	p.closeToTray = widget.NewCheck("Close to system tray instead of quitting", nil)
+	p.closeToTray.SetChecked(cfg.CloseToTray)
 
 	pollDefault := cfg.ProjectsPollSeconds
 	if pollDefault == 0 {
@@ -473,6 +476,7 @@ func (p *settingsPanel) content() fyne.CanvasObject {
 		formItem("Commander override", p.cmdrOverride),
 		checkboxRow(p.replaySession),
 		checkboxRow(p.startMinimized),
+		checkboxRow(p.closeToTray),
 	)
 
 	rcCard := section("ravencolonial.com",
@@ -524,6 +528,7 @@ func (p *settingsPanel) doSave() {
 		CommanderOverride:   p.cmdrOverride.Text,
 		ReplaySession:       p.replaySession.Checked,
 		StartMinimized:      p.startMinimized.Checked,
+		CloseToTray:         p.closeToTray.Checked,
 		ProjectsPollSeconds: pollSec,
 		EDDNEnabled:         p.eddnEnabled.Checked,
 		EDSMEnabled:         p.edsmEnabled.Checked,
