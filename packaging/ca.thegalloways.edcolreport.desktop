@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=ED Colonization Reporter
+GenericName=Elite Dangerous colonization tracker
+Comment=Report Elite Dangerous colonization progress to ravencolonial.com
+Exec=edcolreport
+Icon=ca.thegalloways.edcolreport
+Terminal=false
+Categories=Game;
+Keywords=Elite;Dangerous;colonization;ravencolonial;EDDN;EDSM;Inara;
+StartupNotify=true
+# Fyne sets the X11/Wayland app id to the NewWithID value, so this must
+# match it for the window to associate with this launcher (icon grouping).
+StartupWMClass=ca.thegalloways.edcolreport
