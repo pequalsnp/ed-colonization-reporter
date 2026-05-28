@@ -1,0 +1,57 @@
+name: flatpak
+
+# Builds a Flatpak bundle from the current tree and, on a release tag, attaches
+# it to the GitHub release. This is decoupled from release.yml on purpose: a
+# Flatpak build failure must not block the main binary release. The canonical
+# distribution is still Flathub (built on Flathub's own infra from the
+# flathub/ca.thegalloways.edcolreport repo) — this bundle is a direct-download
+# convenience and a smoke test that the manifest still builds.
+#
+# NOTE: not yet exercised in CI — confirm the container image tag and the
+# flatpak-builder action inputs on the first run.
+
+on:
+  push:
+    tags: ['v*']
+  pull_request:
+    paths:
+      - 'packaging/flatpak/**'
+      - 'packaging/ca.thegalloways.edcolreport.desktop'
+      - 'packaging/ca.thegalloways.edcolreport.metainfo.xml'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/flatpak.yml'
+  workflow_dispatch:
+
+jobs:
+  bundle:
+    name: build flatpak bundle
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-25.08
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install golang SDK extension
+        run: flatpak install -y flathub org.freedesktop.Sdk.Extension.golang//25.08
+
+      - name: Build the checked-out tree (dir source)
+        run: |
+          # The committed manifest builds from a pinned git tag (the Flathub
+          # form). For CI we build the working tree instead by swapping the
+          # git source for a local dir source.
+          sed -i '/- type: git/,/tag: v[0-9]/c\      - type: dir\n        path: ../..\n        skip: [.git, .flatpak-builder, dist, edcolreport, vendor]' \
+            packaging/flatpak/ca.thegalloways.edcolreport.yaml
+
+      - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          bundle: edcolreport.flatpak
+          manifest-path: packaging/flatpak/ca.thegalloways.edcolreport.yaml
+          cache-key: flatpak-builder-${{ github.sha }}
+
+      - name: Attach bundle to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: edcolreport.flatpak
