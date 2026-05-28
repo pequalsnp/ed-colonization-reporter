@@ -59,10 +59,13 @@ jobs:
       - name: Build windows/amd64
         run: |
           mkdir -p dist
+          # Use the no-space -X=name=value form: fyne-cross word-splits the
+          # ldflags string, so "-X main.version=..." would reach the linker as
+          # a bare "-X". The "=" form keeps it a single token.
           fyne-cross windows -arch=amd64 \
             -app-id=ca.thegalloways.edcolreport \
             -name=edcolreport-${GITHUB_REF_NAME}-windows-amd64 \
-            -ldflags="-X main.version=${GITHUB_REF_NAME}" \
+            -ldflags="-X=main.version=${GITHUB_REF_NAME}" \
             ./cmd/edcolreport
           # fyne-cross drops artifacts under fyne-cross/dist/windows-amd64/
           cp fyne-cross/dist/windows-amd64/edcolreport-${GITHUB_REF_NAME}-windows-amd64.exe dist/ \
