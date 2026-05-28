@@ -4,6 +4,11 @@
 /dist/
 /build/
 
+# fyne-cross build artifacts (local cross-compile runs)
+/fyne-cross/
+/Icon.png
+/cmd/edcolreport/fyne_metadata_init.go
+
 # Test artifacts
 *.test
 *.out
