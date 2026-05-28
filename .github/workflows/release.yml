@@ -67,9 +67,11 @@ jobs:
             -name=edcolreport-${GITHUB_REF_NAME}-windows-amd64 \
             -ldflags="-X=main.version=${GITHUB_REF_NAME}" \
             ./cmd/edcolreport
-          # fyne-cross drops artifacts under fyne-cross/dist/windows-amd64/
-          cp fyne-cross/dist/windows-amd64/edcolreport-${GITHUB_REF_NAME}-windows-amd64.exe dist/ \
-            || cp fyne-cross/dist/windows-amd64/*.exe dist/edcolreport-${GITHUB_REF_NAME}-windows-amd64.exe
+          # fyne-cross packages the Windows build as a .zip containing the
+          # .exe (under fyne-cross/dist/windows-amd64/); extract the bare exe.
+          unzip -o -j \
+            fyne-cross/dist/windows-amd64/edcolreport-${GITHUB_REF_NAME}-windows-amd64.zip \
+            -d dist/
 
       - uses: actions/upload-artifact@v7
         with:
