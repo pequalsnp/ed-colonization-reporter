@@ -94,14 +94,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # The flatpak workflow may have already created this release (it
-          # attaches the .flatpak bundle on the same tag). If so, gh release
-          # create fails — fall back to uploading the binaries into it.
-          if ! gh release create "$GITHUB_REF_NAME" \
+          gh release create "$GITHUB_REF_NAME" \
             --title "$GITHUB_REF_NAME" \
             --prerelease \
             --generate-notes \
-            dist-merged/*; then
-            echo "Release already exists; uploading binaries instead."
-            gh release upload "$GITHUB_REF_NAME" dist-merged/* --clobber
-          fi
+            dist-merged/*
