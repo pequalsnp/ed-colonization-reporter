@@ -1,18 +1,12 @@
 name: flatpak
 
-# Builds a Flatpak bundle from the current tree and, on a release tag, attaches
-# it to the GitHub release. This is decoupled from release.yml on purpose: a
-# Flatpak build failure must not block the main binary release. The canonical
-# distribution is still Flathub (built on Flathub's own infra from the
-# flathub/ca.thegalloways.edcolreport repo) — this bundle is a direct-download
-# convenience and a smoke test that the manifest still builds.
-#
-# NOTE: not yet exercised in CI — confirm the container image tag and the
-# flatpak-builder action inputs on the first run.
+# Smoke-test that the Flathub manifest still builds from source. Runs on PRs
+# that touch the packaging/build inputs and on demand. The resulting .flatpak
+# is uploaded as a workflow artifact (downloadable from the run) — it is NOT
+# attached to GitHub releases. The canonical distribution is Flathub, built on
+# Flathub's own infra from the flathub/ca.thegalloways.edcolreport repo.
 
 on:
-  push:
-    tags: ['v*']
   pull_request:
     paths:
       - 'packaging/flatpak/**'
@@ -49,9 +43,3 @@ jobs:
           bundle: edcolreport.flatpak
           manifest-path: packaging/flatpak/ca.thegalloways.edcolreport.yaml
           cache-key: flatpak-builder-${{ github.sha }}
-
-      - name: Attach bundle to release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v3
-        with:
-          files: edcolreport.flatpak
