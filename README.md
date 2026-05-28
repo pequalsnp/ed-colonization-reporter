@@ -78,7 +78,7 @@ The [`PKGBUILD`](packaging/aur/PKGBUILD) builds from the release tarball.
 
 ### From source
 
-Requires Go 1.24+. The UI is built with [Fyne](https://fyne.io), which
+Requires Go 1.26+. The UI is built with [Fyne](https://fyne.io), which
 needs a C compiler and OpenGL/X11 dev headers on Linux. On Arch/CachyOS:
 
 ```

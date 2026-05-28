@@ -1,6 +1,6 @@
 module github.com/pequalsnp/ed-colonization-reporter
 
-go 1.24.0
+go 1.26.0
 
 require (
 	fyne.io/fyne/v2 v2.7.4
