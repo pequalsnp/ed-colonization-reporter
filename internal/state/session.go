@@ -481,24 +481,34 @@ func (s *Session) FCCargo(marketID int64) (map[string]int, bool) {
 func (s *Session) FCCargoAggregate() (name string, cargo map[string]int, at time.Time) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	// Nil cargo signals "no FC known" to the GUI (hides FC/SHIP/DIFF
+	// columns). As soon as an owned carrier is registered — whether
+	// from CarrierStats or the RC linked-carriers lookup — return a
+	// non-nil (possibly empty) map so the columns render.
+	if len(s.ownedCarriers) == 0 {
+		return "", nil, time.Time{}
+	}
 	cargo = map[string]int{}
 	var latest time.Time
-	var latestName string
-	for mid := range s.ownedCarriers {
+	var latestName, fallbackName string
+	for mid, c := range s.ownedCarriers {
 		for k, v := range s.fcCargo[mid] {
 			cargo[k] += v
 		}
+		carrierName := c.Name
+		if carrierName == "" {
+			carrierName = c.Callsign
+		}
+		if fallbackName == "" {
+			fallbackName = carrierName
+		}
 		if t := s.fcCargoAt[mid]; t.After(latest) {
 			latest = t
-			c := s.ownedCarriers[mid]
-			latestName = c.Name
-			if latestName == "" {
-				latestName = c.Callsign
-			}
+			latestName = carrierName
 		}
 	}
-	if len(cargo) == 0 {
-		return "", nil, time.Time{}
+	if latestName == "" {
+		latestName = fallbackName
 	}
 	return latestName, cargo, latest
 }

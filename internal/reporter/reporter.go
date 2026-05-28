@@ -148,10 +148,13 @@ func (r *Reporter) HandleEvent(ctx context.Context, raw journal.Raw) error {
 		}
 		r.Session.SetCommander(e.Name, e.FID)
 		r.emit(LevelInfo, "Commander: %s", e.Name)
-		// Live (not replayed) commander events kick off the one-time
-		// linked-carrier fetch so we recognise FCs that were linked via
-		// the website before this session started.
-		if !raw.Replayed && e.Name != "" && r.linkedCarriersFetchedFor != e.Name {
+		// Kick off the one-time linked-carrier fetch + RC cargo seed.
+		// linkedCarriersFetchedFor guards against re-running for the same
+		// commander, so it's safe to fire from replayed events too — and
+		// we MUST, otherwise sessions that start with replay_session=true
+		// never seed their FC cargo (the only Commander event in the
+		// journal is the one at game-start, which arrives as replayed).
+		if e.Name != "" && r.linkedCarriersFetchedFor != e.Name {
 			r.linkedCarriersFetchedFor = e.Name
 			go r.fetchLinkedCarriers(context.Background(), e.Name)
 		}
@@ -316,6 +319,11 @@ func (r *Reporter) fetchLinkedCarriers(ctx context.Context, cmdr string) {
 			Callsign:   c.Callsign,
 			StarSystem: c.StarSystem,
 		})
+		// Pull cargo from RC immediately so the projects panel can
+		// render the FC/SHIP/DIFF columns without waiting for an
+		// in-game CarrierStats event. Without this seed, players who
+		// don't dock at their FC this session see only NEED · COMMODITY.
+		r.seedFCFromRC(ctx, c.MarketID)
 	}
 	if len(cs) > 0 {
 		r.emit(LevelInfo, "Loaded %d linked FC(s) from ravencolonial", len(cs))

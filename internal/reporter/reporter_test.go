@@ -299,19 +299,35 @@ func TestHandleCommander_FetchesLinkedCarriers(t *testing.T) {
 	}
 }
 
-func TestHandleCommander_DoesNotFetchOnReplay(t *testing.T) {
+func TestHandleCommander_FetchesEvenOnReplay(t *testing.T) {
+	// Sessions with replay_session=true start by replaying the current
+	// journal file from the beginning. The Commander event lives near
+	// the top of that file, so it arrives as replayed. If we skipped
+	// the linked-carriers fetch on replayed events, those sessions
+	// would never seed their FC cargo from RC — which is what was
+	// hiding the FC column in the projects/combined views.
 	sess := state.New()
-	api := &fakeAPI{}
+	api := &fakeAPI{
+		linkedCarriersResp: []ravencolonial.LinkedCarrier{
+			{MarketID: 42, Name: "MY-FC", Callsign: "ABC-12X"},
+		},
+	}
 	r := New(api, sess)
 	raw := mustRaw(t, journal.EventCommander, map[string]any{"Name": "Jameson", "FID": "F1"})
 	raw.Replayed = true
 	if err := r.HandleEvent(context.Background(), raw); err != nil {
 		t.Fatalf("HandleEvent: %v", err)
 	}
-	// Give the goroutine a chance NOT to run.
-	time.Sleep(100 * time.Millisecond)
-	if calls := api.linkedCalls(); len(calls) != 0 {
-		t.Errorf("replayed Commander must not trigger fetch; got %v", calls)
+	deadline := time.After(2 * time.Second)
+	for {
+		if len(api.linkedCalls()) > 0 {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("replayed Commander must trigger linked-carriers fetch")
+		case <-time.After(20 * time.Millisecond):
+		}
 	}
 }
 
