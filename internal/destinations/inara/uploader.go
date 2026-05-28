@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -24,8 +25,22 @@ type SoftwareID struct {
 }
 
 // DefaultFlushInterval is how often the worker batches and posts collected
-// events. EDMC uses 35s; we use 30s, well within Inara's tolerance.
-const DefaultFlushInterval = 30 * time.Second
+// events. Inara's API docs state: "the recommended ratio of sending events
+// is up to once per ~1 minute". 60s keeps us on the right side of that
+// guidance; EDMC uses 35s but it's targeting near-real-time presence and
+// Inara explicitly tolerates a faster cadence for the official client.
+const DefaultFlushInterval = 60 * time.Second
+
+// MaxEventsPerBatch caps how many events we send in a single POST. Inara
+// docs recommend "a few dozens events per request"; 50 keeps us inside that
+// bound. When the queue is larger than this we send the oldest 50 and let
+// the next tick drain the rest — that naturally rate-limits backlog drains.
+const MaxEventsPerBatch = 50
+
+// MaxQueueEvents bounds the in-memory queue so a long Inara outage doesn't
+// blow up our heap. When the queue is full we drop the oldest events first
+// (they're the least relevant — Inara cares most about current state).
+const MaxQueueEvents = 1000
 
 // Uploader is the Inara destination. Events are queued on HandleEvent and
 // flushed by a background worker on a fixed interval to amortise rate-limit
@@ -106,6 +121,12 @@ func (u *Uploader) HandleEvent(ctx context.Context, raw journal.Raw) error {
 		return nil
 	}
 	u.queue = append(u.queue, events...)
+	if over := len(u.queue) - MaxQueueEvents; over > 0 {
+		// Drop the oldest events. Going via copy so the backing array can
+		// be reclaimed and we don't pin a growing slice header.
+		u.queue = append(u.queue[:0:0], u.queue[over:]...)
+		u.status("WARN", fmt.Sprintf("Inara queue capped at %d; dropped %d oldest events (server unreachable?)", MaxQueueEvents, over))
+	}
 	return nil
 }
 
@@ -149,8 +170,15 @@ func (u *Uploader) Flush(ctx context.Context) error {
 		u.mu.Unlock()
 		return nil
 	}
-	events := u.queue
-	u.queue = nil
+	// Take at most MaxEventsPerBatch from the head of the queue; leave the
+	// rest for the next tick. This drains large backlogs at one batch per
+	// flush interval, which is the rate Inara's docs recommend.
+	n := len(u.queue)
+	if n > MaxEventsPerBatch {
+		n = MaxEventsPerBatch
+	}
+	events := append([]Event(nil), u.queue[:n]...)
+	u.queue = append(u.queue[:0:0], u.queue[n:]...)
 	u.mu.Unlock()
 
 	cmdr := u.Session.Commander()
@@ -162,6 +190,7 @@ func (u *Uploader) Flush(ctx context.Context) error {
 		Header: Header{
 			AppName:             u.Software.Name,
 			AppVersion:          u.Software.Version,
+			IsDeveloped:         isDevVersion(u.Software.Version),
 			APIKey:              key,
 			CommanderName:       cmdr,
 			CommanderFrontierID: snap.FID,
@@ -197,9 +226,15 @@ func (u *Uploader) Flush(ctx context.Context) error {
 		return fmt.Errorf("decode reply: %w", err)
 	}
 	if reply.Header.EventStatus/100 != 2 {
-		// Batch-level rejection (usually auth). Drop the batch — retrying
-		// won't help. EDMC does the same.
-		err := fmt.Errorf("Inara batch rejected (%d): %s", reply.Header.EventStatus, reply.Header.EventStatusText)
+		// Batch-level rejection is almost always auth (wrong API key, app
+		// not whitelisted, account suspended). The batch is already dropped
+		// from the queue; we also disable uploads for the rest of the
+		// session so we stop hammering Inara with bad credentials. The
+		// user re-enables in Settings after fixing the key. EDMC does the
+		// same — quoth their inara.py: "API key invalid -> disable plugin".
+		u.SetEnabled(false)
+		err := fmt.Errorf("Inara batch rejected (%d): %s — uploads disabled, fix the API key in Settings to re-enable",
+			reply.Header.EventStatus, reply.Header.EventStatusText)
 		u.status("ERROR", err.Error())
 		return err
 	}
@@ -237,6 +272,20 @@ func (u *Uploader) status(level, msg string) {
 	if u.OnStatus != nil {
 		u.OnStatus(level, msg)
 	}
+}
+
+// isDevVersion reports whether the app version string represents a
+// development build, so we can mark Inara requests as isDeveloped per
+// their API guidance ("if you are still developing your tool, set to
+// true; the data won't be permanently stored"). Treats the literal "dev"
+// build tag (set by main.go when no -ldflags version is provided), and
+// any version containing "dev"/"+dev"/"-dev" as a dev build.
+func isDevVersion(v string) bool {
+	v = strings.ToLower(strings.TrimSpace(v))
+	if v == "" || v == "dev" {
+		return true
+	}
+	return strings.Contains(v, "dev")
 }
 
 // Sentinel for unexpected nil ctx in tests.

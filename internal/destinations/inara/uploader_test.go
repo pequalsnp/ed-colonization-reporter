@@ -342,4 +342,99 @@ func TestUploader_HeaderAuthFailDoesNotRetry(t *testing.T) {
 	if u.QueueLen() != 0 {
 		t.Errorf("auth failure must drop batch; queue = %d", u.QueueLen())
 	}
+	if u.Enabled() {
+		t.Errorf("auth failure must disable uploads to stop hammering Inara")
+	}
+}
+
+func TestUploader_IsDevelopedFlagOnDevBuilds(t *testing.T) {
+	sess := state.New()
+	sess.SetCommander("Jameson", "F1")
+	c := &serverCapture{}
+	srv := newCaptureServer(t, c)
+	u := New(SoftwareID{Name: "edcolreport", Version: "dev"}, sess)
+	u.Endpoint = srv.URL
+	u.SetAPIKey("k")
+	u.SetEnabled(true)
+	_ = u.HandleEvent(context.Background(), raw(t, journal.EventFSDJump, map[string]any{
+		"StarSystem": "Sol", "StarPos": []any{0, 0, 0},
+	}))
+	if err := u.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	reqs := c.snapshot()
+	if len(reqs) != 1 || !reqs[0].Header.IsDeveloped {
+		t.Errorf("dev build must set isDeveloped=true; got header %+v", reqs[0].Header)
+	}
+}
+
+func TestUploader_IsDevelopedOmittedOnReleaseBuilds(t *testing.T) {
+	sess := state.New()
+	sess.SetCommander("Jameson", "F1")
+	c := &serverCapture{}
+	srv := newCaptureServer(t, c)
+	u := New(SoftwareID{Name: "edcolreport", Version: "1.2.3"}, sess)
+	u.Endpoint = srv.URL
+	u.SetAPIKey("k")
+	u.SetEnabled(true)
+	_ = u.HandleEvent(context.Background(), raw(t, journal.EventFSDJump, map[string]any{
+		"StarSystem": "Sol", "StarPos": []any{0, 0, 0},
+	}))
+	if err := u.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	reqs := c.snapshot()
+	if len(reqs) != 1 || reqs[0].Header.IsDeveloped {
+		t.Errorf("release build must not set isDeveloped; got header %+v", reqs[0].Header)
+	}
+}
+
+func TestUploader_BatchSplitWhenOverMax(t *testing.T) {
+	sess := state.New()
+	sess.SetCommander("Jameson", "F1")
+	c := &serverCapture{}
+	u := setupEnabled(t, sess, c)
+
+	// Cram >MaxEventsPerBatch events in by repeating FSDJumps.
+	// Each FSDJump enqueues 2 events; do MaxEventsPerBatch+1 jumps -> queue ~ 2*(N+1).
+	for i := 0; i < MaxEventsPerBatch+1; i++ {
+		_ = u.HandleEvent(context.Background(), raw(t, journal.EventFSDJump, map[string]any{
+			"StarSystem": "Sol", "StarPos": []any{0, 0, 0},
+		}))
+	}
+	prequeue := u.QueueLen()
+	if prequeue <= MaxEventsPerBatch {
+		t.Fatalf("test setup wrong: pre-flush queue %d not over cap %d", prequeue, MaxEventsPerBatch)
+	}
+	if err := u.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	reqs := c.snapshot()
+	if len(reqs) != 1 {
+		t.Fatalf("server saw %d requests; want 1 per flush tick", len(reqs))
+	}
+	if got := len(reqs[0].Events); got != MaxEventsPerBatch {
+		t.Errorf("batch should cap at %d events; got %d", MaxEventsPerBatch, got)
+	}
+	if remaining := u.QueueLen(); remaining != prequeue-MaxEventsPerBatch {
+		t.Errorf("overflow must stay queued; got %d, want %d", remaining, prequeue-MaxEventsPerBatch)
+	}
+}
+
+func TestUploader_QueueCappedAtMax(t *testing.T) {
+	sess := state.New()
+	sess.SetCommander("Jameson", "F1")
+	c := &serverCapture{}
+	u := setupEnabled(t, sess, c)
+
+	// Each FSDJump enqueues 2 events; pump enough to overflow.
+	pumps := (MaxQueueEvents / 2) + 50
+	for i := 0; i < pumps; i++ {
+		_ = u.HandleEvent(context.Background(), raw(t, journal.EventFSDJump, map[string]any{
+			"StarSystem": "Sol", "StarPos": []any{0, 0, 0},
+		}))
+	}
+	if got := u.QueueLen(); got > MaxQueueEvents {
+		t.Errorf("queue must not exceed MaxQueueEvents=%d; got %d", MaxQueueEvents, got)
+	}
 }
