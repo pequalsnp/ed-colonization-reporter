@@ -47,16 +47,16 @@
   <!-- TODO(flathub): Flathub requires at least one hosted screenshot, linked
        directly to an image resource pinned to a TAG or COMMIT (never a branch).
        Commit a real PNG under docs/screenshots/ and point at the release tag,
-       e.g. .../ed-colonization-reporter/v0.2.0/docs/screenshots/projects.png -->
+       e.g. .../ed-colonization-reporter/v0.3.0/docs/screenshots/projects.png -->
   <screenshots>
     <screenshot type="default">
       <caption>The Projects tab showing outstanding colonization commodities</caption>
-      <image>https://raw.githubusercontent.com/pequalsnp/ed-colonization-reporter/v0.2.0/docs/screenshots/projects.png</image>
+      <image>https://raw.githubusercontent.com/pequalsnp/ed-colonization-reporter/v0.3.0/docs/screenshots/projects.png</image>
     </screenshot>
   </screenshots>
 
   <releases>
-    <release version="0.2.0-alpha" date="2026-05-28">
+    <release version="0.3.0" date="2026-05-28">
       <description>
         <p>Alpha: core colonization reporting, Fleet Carrier cargo sync, and EDDN/EDSM/Inara uploads.</p>
       </description>
