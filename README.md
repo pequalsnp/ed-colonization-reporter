@@ -39,7 +39,7 @@ not yet implemented.
   list and rate-limit headers. Requires an API key from
   [edsm.net/en/settings/api](https://www.edsm.net/en/settings/api).
 - **[Inara](https://inara.cz/)** — pushes typed location/dock/carrier-jump
-  events plus pilot ranks to your Inara profile, batched every 30 seconds.
+  events plus pilot ranks to your Inara profile, batched about once a minute.
   Requires an API key from [inara.cz/settings-api](https://inara.cz/settings-api/).
   Silently skips beta/legacy galaxies.
 
@@ -51,6 +51,30 @@ not yet implemented.
   settings page with toggles + API-key fields for each destination.
 
 ## Install
+
+### Flatpak (Linux)
+
+Once published on Flathub:
+
+```
+flatpak install flathub ca.thegalloways.edcolreport
+```
+
+To build the Flatpak from source in the meantime, see
+[`packaging/flatpak/README.md`](packaging/flatpak/README.md). Note: the journal
+lives inside your Steam/Proton (or Wine) prefix — the sandbox grants read-only
+access to the common Steam paths; for a custom prefix, add it with
+`flatpak override --user --filesystem=PATH:ro ca.thegalloways.edcolreport`.
+
+### Arch Linux (AUR)
+
+Once published:
+
+```
+yay -S edcolreport     # or your preferred AUR helper
+```
+
+The [`PKGBUILD`](packaging/aur/PKGBUILD) builds from the release tarball.
 
 ### From source
 
@@ -119,7 +143,8 @@ The CI workflow runs the same on every push.
   the Frontier OAuth redirect (Frontier requires HTTPS, so we route the
   callback through a static GitHub Pages page that forwards to localhost).
 - **Cross-compile** to Windows uses [fyne-cross](https://github.com/fyne-io/fyne-cross)
-  (Docker-based). macOS is unsupported by the release workflow.
+  (Docker-based). macOS is not built — Elite Dangerous has no native macOS
+  client, so there's nothing to report from.
 
 ## Acknowledgements
 
