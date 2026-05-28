@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>ca.thegalloways.edcolreport</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+
+  <name>ED Colonization Reporter</name>
+  <summary>Track Elite Dangerous colonization progress</summary>
+
+  <description>
+    <p>
+      A small cross-platform desktop client that reports Elite Dangerous
+      colonization progress to ravencolonial.com by tailing your game
+      journal in the background. Built primarily for Linux, where SrvSurvey
+      is not available.
+    </p>
+    <p>It can also relay journal events to the community trackers:</p>
+    <ul>
+      <li>ravencolonial.com — colonization depot snapshots, contributions, and Fleet Carrier cargo sync.</li>
+      <li>EDDN — anonymous journal and commodity-market messages.</li>
+      <li>EDSM — star-map and commander tracking.</li>
+      <li>Inara — typed location, dock, and carrier-jump events plus pilot ranks.</li>
+    </ul>
+    <p>
+      Scope is intentionally narrow: colonization reporting only. No
+      exploration overlays, no SRV survey tooling.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">ca.thegalloways.edcolreport.desktop</launchable>
+
+  <url type="homepage">https://github.com/pequalsnp/ed-colonization-reporter</url>
+  <url type="bugtracker">https://github.com/pequalsnp/ed-colonization-reporter/issues</url>
+  <url type="vcs-browser">https://github.com/pequalsnp/ed-colonization-reporter</url>
+
+  <developer id="ca.thegalloways">
+    <name>Kyle Galloway</name>
+  </developer>
+
+  <content_rating type="oars-1.1" />
+
+  <branding>
+    <color type="primary" scheme_preference="light">#ff8000</color>
+    <color type="primary" scheme_preference="dark">#14161a</color>
+  </branding>
+
+  <!-- TODO(flathub): Flathub requires at least one hosted screenshot, linked
+       directly to an image resource pinned to a TAG or COMMIT (never a branch).
+       Commit a real PNG under docs/screenshots/ and point at the release tag,
+       e.g. .../ed-colonization-reporter/v0.2.0/docs/screenshots/projects.png -->
+  <screenshots>
+    <screenshot type="default">
+      <caption>The Projects tab showing outstanding colonization commodities</caption>
+      <image>https://raw.githubusercontent.com/pequalsnp/ed-colonization-reporter/v0.2.0/docs/screenshots/projects.png</image>
+    </screenshot>
+  </screenshots>
+
+  <releases>
+    <release version="0.2.0-alpha" date="2026-05-28">
+      <description>
+        <p>Alpha: core colonization reporting, Fleet Carrier cargo sync, and EDDN/EDSM/Inara uploads.</p>
+      </description>
+    </release>
+  </releases>
+</component>
