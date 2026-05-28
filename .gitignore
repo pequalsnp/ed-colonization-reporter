@@ -9,6 +9,12 @@
 /Icon.png
 /cmd/edcolreport/fyne_metadata_init.go
 
+# makepkg build output (packaging/aur)
+/packaging/aur/src/
+/packaging/aur/pkg/
+/packaging/aur/*.pkg.tar.*
+/packaging/aur/*.tar.gz
+
 # Test artifacts
 *.test
 *.out
