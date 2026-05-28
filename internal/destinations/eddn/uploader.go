@@ -14,12 +14,14 @@ package eddn
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -105,6 +107,13 @@ func (u *Uploader) HandleEvent(ctx context.Context, raw journal.Raw) error {
 	if u.Session.Commander() == "" {
 		return nil
 	}
+	// EDDN's gateway drops messages tagged as Alpha/Beta gameversions, and
+	// Legacy galaxy data belongs on a different schema/relay than the live
+	// one we target. Filter both client-side so we don't waste EDDN's
+	// validation cycles on data it'll reject anyway.
+	if gv, _ := u.Session.GameVersion(); !isUploadableGameVersion(gv) {
+		return nil
+	}
 	switch raw.Event {
 	case journal.EventFSDJump, journal.EventLocation, journal.EventDocked, journal.EventCarrierJump:
 		return u.uploadJournal(ctx, raw)
@@ -112,6 +121,21 @@ func (u *Uploader) HandleEvent(ctx context.Context, raw journal.Raw) error {
 		return u.uploadMarket(ctx, raw)
 	}
 	return nil
+}
+
+// isUploadableGameVersion returns false for the gameversion strings EDDN
+// will not accept (alpha/beta) or that belong on a different relay
+// (legacy). An empty string is treated as uploadable — we may not have
+// seen LoadGame yet but the rest of the validation pipeline will catch
+// any missing-required-field issues downstream.
+func isUploadableGameVersion(v string) bool {
+	v = strings.ToLower(v)
+	if v == "" {
+		return true
+	}
+	return !strings.Contains(v, "alpha") &&
+		!strings.Contains(v, "beta") &&
+		!strings.Contains(v, "legacy")
 }
 
 func (u *Uploader) uploadJournal(ctx context.Context, raw journal.Raw) error {
@@ -193,31 +217,53 @@ func (u *Uploader) uploadMarket(ctx context.Context, raw journal.Raw) error {
 // send wraps the message in the EDDN envelope and POSTs it. label is a
 // human description of what's being uploaded (e.g. "FSDJump → Sol")
 // surfaced in the Activity tab on success.
+//
+// The body is gzip-compressed (Content-Encoding: gzip) per EDDN's
+// recommendation — these JSON envelopes compress 3-5× and EDDN's
+// gateway processes a high volume of uploads, so respecting the
+// gzip recommendation is the polite default.
 func (u *Uploader) send(ctx context.Context, schemaRef string, message map[string]any, label string) error {
 	gv, gb := u.Session.GameVersion()
 	if u.TestMode {
 		schemaRef += "/test"
 	}
+	header := map[string]any{
+		"uploaderID":      u.Session.Commander(),
+		"softwareName":    u.Software.Name,
+		"softwareVersion": u.Software.Version,
+	}
+	// Omit gameversion/gamebuild from the header when unknown rather than
+	// sending empty strings — the schema allows the keys to be absent and
+	// some downstream listeners reject zero-length values.
+	if gv != "" {
+		header["gameversion"] = gv
+	}
+	if gb != "" {
+		header["gamebuild"] = gb
+	}
 	envelope := map[string]any{
 		"$schemaRef": schemaRef,
-		"header": map[string]any{
-			"uploaderID":      u.Session.Commander(),
-			"softwareName":    u.Software.Name,
-			"softwareVersion": u.Software.Version,
-			"gameversion":     gv,
-			"gamebuild":       gb,
-		},
-		"message": message,
+		"header":     header,
+		"message":    message,
 	}
 	body, err := json.Marshal(envelope)
 	if err != nil {
 		return fmt.Errorf("marshal envelope: %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.Endpoint, bytes.NewReader(body))
+	var compressed bytes.Buffer
+	gz := gzip.NewWriter(&compressed)
+	if _, err := gz.Write(body); err != nil {
+		return fmt.Errorf("gzip: %w", err)
+	}
+	if err := gz.Close(); err != nil {
+		return fmt.Errorf("gzip close: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.Endpoint, &compressed)
 	if err != nil {
 		return fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Encoding", "gzip")
 	resp, err := u.HTTPClient.Do(req)
 	if err != nil {
 		u.status("ERROR", "EDDN upload failed: "+err.Error())

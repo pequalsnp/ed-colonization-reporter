@@ -123,6 +123,12 @@ func (u *Uploader) HandleEvent(ctx context.Context, raw journal.Raw) error {
 	if u.discard.Has(raw.Event) {
 		return nil
 	}
+	// EDSM doesn't track the Legacy galaxy and ignores Beta/Alpha uploads.
+	// Filter client-side so we don't ping their endpoint with data it'll
+	// throw away. EDMC's edsm.py applies the same rule.
+	if gv, _ := u.Session.GameVersion(); !isUploadableGameVersion(gv) {
+		return nil
+	}
 	// Respect rate-limit backoff if the last response told us to slow down.
 	if next := u.nextAllowed.Load(); next > 0 && time.Now().Unix() < next {
 		return nil
@@ -230,4 +236,17 @@ func (u *Uploader) status(level, msg string) {
 type edsmReply struct {
 	MsgNum int    `json:"msgnum"`
 	Msg    string `json:"msg"`
+}
+
+// isUploadableGameVersion returns false for gameversions EDSM declines:
+// alpha/beta builds and the Legacy galaxy. Empty is treated as
+// uploadable — we may simply not have seen LoadGame yet.
+func isUploadableGameVersion(v string) bool {
+	v = strings.ToLower(v)
+	if v == "" {
+		return true
+	}
+	return !strings.Contains(v, "alpha") &&
+		!strings.Contains(v, "beta") &&
+		!strings.Contains(v, "legacy")
 }

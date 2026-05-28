@@ -1,6 +1,7 @@
 package eddn
 
 import (
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -36,7 +37,21 @@ func mustRaw(t *testing.T, event string, payload map[string]any) journal.Raw {
 func uploaderWithMock(t *testing.T, sess *state.Session, captured *[]map[string]any) (*Uploader, *httptest.Server) {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
+		// EDDN expects gzipped uploads; assert the encoding header and
+		// decompress before validating the JSON.
+		if r.Header.Get("Content-Encoding") != "gzip" {
+			t.Errorf("missing Content-Encoding: gzip; got %q", r.Header.Get("Content-Encoding"))
+			http.Error(w, "expected gzip", 400)
+			return
+		}
+		gz, err := gzip.NewReader(r.Body)
+		if err != nil {
+			t.Errorf("gzip reader: %v", err)
+			http.Error(w, "bad gzip", 400)
+			return
+		}
+		defer gz.Close()
+		body, _ := io.ReadAll(gz)
 		var env map[string]any
 		if err := json.Unmarshal(body, &env); err != nil {
 			t.Errorf("server got invalid JSON: %v; body=%s", err, body)
@@ -315,6 +330,65 @@ func TestUploader_ServerErrorReturnsError(t *testing.T) {
 	err := u.HandleEvent(context.Background(), raw)
 	if err == nil {
 		t.Fatal("expected error from EDDN 400")
+	}
+}
+
+func TestUploader_SkipsBetaGameversion(t *testing.T) {
+	sess := state.New()
+	sess.SetCommander("Jameson", "F1")
+	sess.SetGameVersion("4.0.0.beta3", "r999/r0 ")
+	captured := []map[string]any{}
+	u, _ := uploaderWithMock(t, sess, &captured)
+	raw := mustRaw(t, journal.EventFSDJump, map[string]any{
+		"StarSystem": "Sol", "SystemAddress": 1, "StarPos": []any{0.0, 0.0, 0.0},
+	})
+	if err := u.HandleEvent(context.Background(), raw); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if len(captured) != 0 {
+		t.Errorf("beta gameversion must not upload; EDDN rejects them at the gateway. got %d", len(captured))
+	}
+}
+
+func TestUploader_SkipsLegacyGameversion(t *testing.T) {
+	sess := state.New()
+	sess.SetCommander("Jameson", "F1")
+	sess.SetGameVersion("4.0.0.1 Legacy", "r999/r0 ")
+	captured := []map[string]any{}
+	u, _ := uploaderWithMock(t, sess, &captured)
+	raw := mustRaw(t, journal.EventFSDJump, map[string]any{
+		"StarSystem": "Sol", "SystemAddress": 1, "StarPos": []any{0.0, 0.0, 0.0},
+	})
+	if err := u.HandleEvent(context.Background(), raw); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if len(captured) != 0 {
+		t.Errorf("legacy gameversion belongs on a separate relay; got %d uploads", len(captured))
+	}
+}
+
+func TestUploader_OmitsEmptyGameversionFromHeader(t *testing.T) {
+	sess := state.New()
+	sess.SetCommander("Jameson", "F1")
+	// No SetGameVersion call — header should omit gameversion/gamebuild
+	// rather than send empty strings.
+	captured := []map[string]any{}
+	u, _ := uploaderWithMock(t, sess, &captured)
+	raw := mustRaw(t, journal.EventFSDJump, map[string]any{
+		"StarSystem": "Sol", "SystemAddress": 1, "StarPos": []any{0.0, 0.0, 0.0},
+	})
+	if err := u.HandleEvent(context.Background(), raw); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if len(captured) != 1 {
+		t.Fatalf("captured %d, want 1", len(captured))
+	}
+	hdr := captured[0]["header"].(map[string]any)
+	if _, ok := hdr["gameversion"]; ok {
+		t.Errorf("gameversion must be omitted when unknown; got %v", hdr["gameversion"])
+	}
+	if _, ok := hdr["gamebuild"]; ok {
+		t.Errorf("gamebuild must be omitted when unknown; got %v", hdr["gamebuild"])
 	}
 }
 
