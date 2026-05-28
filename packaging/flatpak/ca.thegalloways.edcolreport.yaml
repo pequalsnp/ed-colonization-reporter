@@ -1,0 +1,65 @@
+# Flathub manifest for ED Colonization Reporter.
+#
+# Builds from source against the freedesktop runtime + the golang SDK
+# extension. The build is fully offline (a Flathub requirement): Go modules
+# are reconstructed into vendor/ at the fetch phase from the generated
+# go.mod.yaml — see packaging/flatpak/generate-sources.sh and README.md.
+id: ca.thegalloways.edcolreport
+runtime: org.freedesktop.Platform
+runtime-version: '25.08'
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.golang
+command: edcolreport
+
+finish-args:
+  # Runtime network: ravencolonial, EDDN, EDSM, Inara, and the Frontier OAuth
+  # callback all need it. (The *build* stays offline — modules are vendored.)
+  - --share=network
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  # Read-only access to where the Elite Dangerous journal lives. Fyne uses its
+  # own file dialog (not the portal), so the path must be visible in the
+  # sandbox for the in-app picker + auto-detection to reach it. Scoped to the
+  # known Steam/Proton locations rather than all of $HOME (least privilege):
+  #   ~/.steam ............... native Steam (default)
+  #   xdg-data/Steam ......... native Steam under ~/.local/share/Steam
+  #   ~/.var/app/com.valvesoftware.Steam ... Flatpak Steam
+  # Custom Wine/Lutris prefixes: grant per-user with
+  #   flatpak override --user --filesystem=PATH:ro ca.thegalloways.edcolreport
+  - --filesystem=~/.steam:ro
+  - --filesystem=xdg-data/Steam:ro
+  - --filesystem=~/.var/app/com.valvesoftware.Steam:ro
+  # System tray (StatusNotifier, opt-in) + desktop notifications.
+  - --talk-name=org.kde.StatusNotifierWatcher
+  - --talk-name=org.freedesktop.Notifications
+
+modules:
+  - name: edcolreport
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/golang/bin
+      env:
+        # Build against the SDK's Go only — never fetch a toolchain (no net).
+        GOTOOLCHAIN: local
+        GOFLAGS: '-mod=vendor'
+    build-commands:
+      - go build -trimpath -ldflags="-s -w -X main.version=v0.2.0"
+        -o /app/bin/edcolreport ./cmd/edcolreport
+      - install -Dm644 packaging/ca.thegalloways.edcolreport.desktop
+        /app/share/applications/ca.thegalloways.edcolreport.desktop
+      - install -Dm644 packaging/ca.thegalloways.edcolreport.metainfo.xml
+        /app/share/metainfo/ca.thegalloways.edcolreport.metainfo.xml
+      - install -Dm644 packaging/ca.thegalloways.edcolreport.svg
+        /app/share/icons/hicolor/scalable/apps/ca.thegalloways.edcolreport.svg
+    sources:
+      - type: git
+        url: https://github.com/pequalsnp/ed-colonization-reporter.git
+        tag: v0.2.0
+        # Flathub requires a commit pin alongside the tag; fill in at submission:
+        # commit: 0000000000000000000000000000000000000000
+      # Generated — reconstructs vendor/ offline (it also pulls in modules.txt).
+      # Regenerate on every dependency bump with packaging/flatpak/generate-sources.sh.
+      - go.mod.yml
