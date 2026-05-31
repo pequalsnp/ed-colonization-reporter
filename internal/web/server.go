@@ -459,6 +459,13 @@ func (s *Server) runTailer(ctx context.Context) {
 			Time: time.Now(), Level: reporter.LevelInfo,
 			Message: "Backfill enabled: replaying current journal file from start.",
 		})
+	} else {
+		// Replay is off, so the tailer starts at end-of-file and skips the
+		// journal preamble. Seed durable state (ship, cargo, materials) from
+		// that preamble first — these are snapshots that otherwise wouldn't
+		// reappear until a game restart. Uploads are unaffected: the seed
+		// events are flagged Replayed, which every uploader skips.
+		s.seedStateFromJournal(ctx, dir)
 	}
 	s.hub.Publish(reporter.Status{
 		Time: time.Now(), Level: reporter.LevelInfo,
@@ -485,6 +492,25 @@ func (s *Server) runTailer(ctx context.Context) {
 			Message: "Tailer exited: " + err.Error(),
 		})
 	}
+}
+
+// seedStateFromJournal reads the current journal's state-snapshot preamble
+// and feeds it through the destination multiplex as replayed events, so ship,
+// cargo, and engineering-materials state are populated at launch even when
+// session replay is disabled. Best-effort: a missing/unreadable journal is
+// not fatal — live events will populate state as they arrive.
+func (s *Server) seedStateFromJournal(ctx context.Context, dir string) {
+	seeds, err := journal.ReadStateSeed(dir)
+	if err != nil || len(seeds) == 0 {
+		return
+	}
+	for _, raw := range seeds {
+		_ = s.mux.HandleEvent(ctx, raw)
+	}
+	s.hub.Publish(reporter.Status{
+		Time: time.Now(), Level: reporter.LevelInfo,
+		Message: "Seeded ship, cargo, and materials state from current journal.",
+	})
 }
 
 // staticHandler serves the embedded HTML at /.
