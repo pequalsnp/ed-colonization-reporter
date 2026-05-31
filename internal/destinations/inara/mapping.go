@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/pequalsnp/ed-colonization-reporter/internal/journal"
+	"github.com/pequalsnp/ed-colonization-reporter/internal/state"
 )
 
 // fakeStarSystems lists names that appear in the journal but represent
@@ -19,8 +20,9 @@ var fakeStarSystems = map[string]bool{
 // mapEvent converts a parsed journal event into zero or more Inara events.
 // The shouldSuppressDock flag is consulted (and may be flipped) so that the
 // caller can mute a Docked event that the game emits as a side effect of
-// CarrierJump or Location-with-Docked.
-func mapEvent(raw journal.Raw, suppressDock *bool) ([]Event, error) {
+// CarrierJump or Location-with-Docked. The session supplies context the
+// journal event itself lacks (e.g. a mission's origin system/station).
+func mapEvent(raw journal.Raw, suppressDock *bool, sess *state.Session) ([]Event, error) {
 	switch raw.Event {
 	case journal.EventFSDJump:
 		return mapFSDJump(raw)
@@ -34,6 +36,32 @@ func mapEvent(raw journal.Raw, suppressDock *bool) ([]Event, error) {
 			return nil, nil
 		}
 		return mapDocked(raw)
+
+	// Commander state.
+	case journal.EventRank:
+		return mapRank(raw)
+	case journal.EventProgress:
+		return mapProgress(raw)
+	case journal.EventReputation:
+		return mapReputation(raw)
+	case journal.EventLoadGame:
+		return mapCredits(raw)
+	case journal.EventLoadout:
+		return mapLoadout(raw)
+	case journal.EventCargo:
+		return mapCargo(raw)
+	case journal.EventMaterials:
+		return mapMaterials(raw)
+
+	// Mission log.
+	case journal.EventMissionAccepted:
+		return mapMissionAccepted(raw, sess)
+	case journal.EventMissionCompleted:
+		return mapMissionEnd(raw, EventSetCommanderMissionCompleted)
+	case journal.EventMissionFailed:
+		return mapMissionEnd(raw, EventSetCommanderMissionFailed)
+	case journal.EventMissionAbandoned:
+		return mapMissionEnd(raw, EventSetCommanderMissionAbandoned)
 	}
 	return nil, nil
 }
@@ -55,10 +83,13 @@ func mapFSDJump(raw journal.Raw) ([]Event, error) {
 		"starsystemCoords": e.StarPos,
 		"jumpDistance":     extractFloat(raw.Payload, "JumpDist"),
 	}
-	return []Event{
+	out := []Event{
 		{Name: EventSetCommanderTravelLocation, Timestamp: e.Timestamp.UTC().Format("2006-01-02T15:04:05Z"), Data: locData},
 		{Name: EventAddCommanderTravelFSDJump, Timestamp: e.Timestamp.UTC().Format("2006-01-02T15:04:05Z"), Data: jumpData},
-	}, nil
+	}
+	// Per-minor-faction standing for this system — the BGS-relevant signal.
+	out = append(out, mapMinorFactionReputation(raw)...)
+	return out, nil
 }
 
 func mapLocation(raw journal.Raw, suppressDock *bool) ([]Event, error) {
@@ -87,9 +118,11 @@ func mapLocation(raw journal.Raw, suppressDock *bool) ([]Event, error) {
 		// otherwise log the dock twice.
 		*suppressDock = true
 	}
-	return []Event{
+	out := []Event{
 		{Name: EventSetCommanderTravelLocation, Timestamp: e.Timestamp.UTC().Format("2006-01-02T15:04:05Z"), Data: data},
-	}, nil
+	}
+	out = append(out, mapMinorFactionReputation(raw)...)
+	return out, nil
 }
 
 func mapCarrierJump(raw journal.Raw, suppressDock *bool) ([]Event, error) {

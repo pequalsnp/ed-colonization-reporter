@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/pequalsnp/ed-colonization-reporter/internal/journal"
+	"github.com/pequalsnp/ed-colonization-reporter/internal/state"
 )
 
 func raw(t *testing.T, event string, payload map[string]any) journal.Raw {
@@ -33,7 +34,7 @@ func TestMapFSDJump_EmitsLocationAndJump(t *testing.T) {
 		"JumpDist":      14.3,
 	})
 	suppress := false
-	events, err := mapEvent(r, &suppress)
+	events, err := mapEvent(r, &suppress, state.New())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +59,7 @@ func TestMapFSDJump_SkipsFakeSystems(t *testing.T) {
 			"StarSystem": sys, "SystemAddress": 1, "StarPos": []any{0, 0, 0},
 		})
 		suppress := false
-		events, err := mapEvent(r, &suppress)
+		events, err := mapEvent(r, &suppress, state.New())
 		if err != nil {
 			t.Fatalf("%s: %v", sys, err)
 		}
@@ -77,7 +78,7 @@ func TestMapLocation_DockedSetsSuppressFlag(t *testing.T) {
 		"MarketID":    128666761,
 	})
 	suppress := false
-	events, err := mapEvent(r, &suppress)
+	events, err := mapEvent(r, &suppress, state.New())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +106,7 @@ func TestMapDocked_SuppressedAfterCarrierJump(t *testing.T) {
 		"StarPos":       []any{0, 0, 0},
 	})
 	suppress := false
-	cevents, err := mapEvent(carrierRaw, &suppress)
+	cevents, err := mapEvent(carrierRaw, &suppress, state.New())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +121,7 @@ func TestMapDocked_SuppressedAfterCarrierJump(t *testing.T) {
 	dockedRaw := raw(t, journal.EventDocked, map[string]any{
 		"StarSystem": "Sol", "StationName": "MY-FC ABC-12X", "MarketID": 3700000123,
 	})
-	devents, err := mapEvent(dockedRaw, &suppress)
+	devents, err := mapEvent(dockedRaw, &suppress, state.New())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +138,7 @@ func TestMapDocked_NormalCase(t *testing.T) {
 		"StarSystem": "Sol", "StationName": "Abraham Lincoln", "MarketID": 128666761,
 	})
 	suppress := false
-	events, err := mapEvent(r, &suppress)
+	events, err := mapEvent(r, &suppress, state.New())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +159,7 @@ func TestMapDocked_NormalCase(t *testing.T) {
 func TestMapEvent_UnknownEventReturnsNil(t *testing.T) {
 	r := raw(t, "SomethingElse", map[string]any{"foo": "bar"})
 	suppress := false
-	events, err := mapEvent(r, &suppress)
+	events, err := mapEvent(r, &suppress, state.New())
 	if err != nil {
 		t.Fatal(err)
 	}

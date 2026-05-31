@@ -113,7 +113,7 @@ func (u *Uploader) HandleEvent(ctx context.Context, raw journal.Raw) error {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 
-	events, err := mapEvent(raw, &u.suppressDock)
+	events, err := mapEvent(raw, &u.suppressDock, u.Session)
 	if err != nil {
 		return fmt.Errorf("inara map %s: %w", raw.Event, err)
 	}

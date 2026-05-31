@@ -52,9 +52,23 @@ type EventReply struct {
 
 // Inara eventName constants for the events this uploader emits.
 const (
-	EventSetCommanderTravelLocation  = "setCommanderTravelLocation"
-	EventAddCommanderTravelFSDJump   = "addCommanderTravelFSDJump"
-	EventAddCommanderTravelDock      = "addCommanderTravelDock"
-	EventAddCommanderTravelCarrier   = "addCommanderTravelCarrierJump"
-	EventSetCommanderRankPilot       = "setCommanderRankPilot"
+	EventSetCommanderTravelLocation = "setCommanderTravelLocation"
+	EventAddCommanderTravelFSDJump  = "addCommanderTravelFSDJump"
+	EventAddCommanderTravelDock     = "addCommanderTravelDock"
+	EventAddCommanderTravelCarrier  = "addCommanderTravelCarrierJump"
+
+	// Commander state.
+	EventSetCommanderRankPilot              = "setCommanderRankPilot"
+	EventSetCommanderReputationMajorFaction = "setCommanderReputationMajorFaction"
+	EventSetCommanderReputationMinorFaction = "setCommanderReputationMinorFaction"
+	EventSetCommanderCredits                = "setCommanderCredits"
+	EventSetCommanderShip                   = "setCommanderShip"
+	EventSetCommanderInventoryMaterials     = "setCommanderInventoryMaterials"
+	EventSetCommanderInventoryCargo         = "setCommanderInventoryCargo"
+
+	// Mission log — the closest Inara gets to per-minor-faction BGS activity.
+	EventAddCommanderMission          = "addCommanderMission"
+	EventSetCommanderMissionCompleted = "setCommanderMissionCompleted"
+	EventSetCommanderMissionFailed    = "setCommanderMissionFailed"
+	EventSetCommanderMissionAbandoned = "setCommanderMissionAbandoned"
 )
