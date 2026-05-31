@@ -453,9 +453,15 @@ func (panel *projectsPanel) buildProjectCard(p ravencolonial.Project, expanded b
 	summary := canvas.NewText(fmt.Sprintf("%s units outstanding", humanCount(outstanding)), edFgMuted)
 	summary.TextSize = 12
 
+	// A short list (≤5 commodities) has no expand toggle, so we render
+	// the full grid inline — otherwise its FC/ship/buyable breakdown
+	// would never be reachable. Longer lists collapse to the compact
+	// top-N line and reveal the grid behind the toggle.
+	expandable := countOutstanding(p.Commodities) > 5
+
 	body := container.NewVBox(bar, summary)
 	if outstanding > 0 {
-		if expanded {
+		if expanded || !expandable {
 			fcName, fcInv, _ := panel.srv.LastFCInventory()
 			shipInv, _ := panel.srv.LastShipCargo()
 			station, marketStock, _ := panel.srv.CurrentMarket()
@@ -479,7 +485,7 @@ func (panel *projectsPanel) buildProjectCard(p ravencolonial.Project, expanded b
 	// Expand/collapse toggle. Only shown when there's something worth
 	// expanding (more commodities than fit in the top-N line).
 	var toggle fyne.CanvasObject
-	if countOutstanding(p.Commodities) > 5 {
+	if expandable {
 		icon := theme.MenuDropDownIcon()
 		label := "Show all commodities"
 		if expanded {
