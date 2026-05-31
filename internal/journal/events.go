@@ -28,6 +28,38 @@ const (
 	EventColonisationConstructionDepot = "ColonisationConstructionDepot"
 	EventColonisationContribution      = "ColonisationContribution"
 	EventColonisationBeaconDeployed    = "ColonisationBeaconDeployed"
+
+	// Station-side files. These journal events are just the trigger; the
+	// payload lives in the sibling JSON file (Outfitting.json, Shipyard.json,
+	// NavRoute.json) the game writes alongside the journal.
+	EventOutfitting = "Outfitting"
+	EventShipyard   = "Shipyard"
+	EventNavRoute   = "NavRoute"
+
+	// Exploration / scan events relayed to EDDN. Several of these do not
+	// carry the player's system name/coords inline and must be augmented
+	// from session state before upload.
+	EventScan                = "Scan"
+	EventFSSDiscoveryScan    = "FSSDiscoveryScan"
+	EventFSSAllBodiesFound   = "FSSAllBodiesFound"
+	EventFSSSignalDiscovered = "FSSSignalDiscovered"
+	EventFSSBodySignals      = "FSSBodySignals"
+	EventSAASignalsFound     = "SAASignalsFound"
+	EventNavBeaconScan       = "NavBeaconScan"
+	EventScanBaryCentre      = "ScanBaryCentre"
+	EventApproachSettlement  = "ApproachSettlement"
+	EventCodexEntry          = "CodexEntry"
+
+	// Inara commander-state and activity events.
+	EventRank             = "Rank"
+	EventProgress         = "Progress"
+	EventReputation       = "Reputation"
+	EventLoadout          = "Loadout"
+	EventMaterials        = "Materials"
+	EventMissionAccepted  = "MissionAccepted"
+	EventMissionCompleted = "MissionCompleted"
+	EventMissionFailed    = "MissionFailed"
+	EventMissionAbandoned = "MissionAbandoned"
 )
 
 // Envelope is the minimal common shape of every journal event line. Parse
@@ -92,12 +124,14 @@ type CommanderEvent struct {
 // "unknown" (not false).
 type LoadGameEvent struct {
 	Envelope
-	Commander string `json:"Commander"`
-	FID       string `json:"FID"`
-	Horizons  *bool  `json:"Horizons,omitempty"`
-	Odyssey   *bool  `json:"Odyssey,omitempty"`
+	Commander   string `json:"Commander"`
+	FID         string `json:"FID"`
+	Horizons    *bool  `json:"Horizons,omitempty"`
+	Odyssey     *bool  `json:"Odyssey,omitempty"`
 	GameVersion string `json:"gameversion"`
 	GameBuild   string `json:"build"`
+	Credits     int64  `json:"Credits"`
+	Loan        int64  `json:"Loan"`
 }
 
 // FileheaderEvent is the first entry of every journal file; it carries the
@@ -146,8 +180,8 @@ type UndockedEvent struct {
 // ResourceRequired is one row of the ResourcesRequired array inside a
 // ColonisationConstructionDepot event.
 type ResourceRequired struct {
-	Name           string `json:"Name"`            // internal symbol, e.g. "$titanium_name;"
-	NameLocalised  string `json:"Name_Localised"`  // human-readable, e.g. "Titanium"
+	Name           string `json:"Name"`           // internal symbol, e.g. "$titanium_name;"
+	NameLocalised  string `json:"Name_Localised"` // human-readable, e.g. "Titanium"
 	RequiredAmount int    `json:"RequiredAmount"`
 	ProvidedAmount int    `json:"ProvidedAmount"`
 	Payment        int    `json:"Payment"`
@@ -270,7 +304,7 @@ type CargoTransferItem struct {
 	Type          string `json:"Type"`           // short symbol, e.g. "cmmcomposite"
 	TypeLocalised string `json:"Type_Localised"` // "CMM Composite"
 	Count         int    `json:"Count"`
-	Direction     string `json:"Direction"`      // "tocarrier" | "toship" | "tosrv"
+	Direction     string `json:"Direction"` // "tocarrier" | "toship" | "tosrv"
 	MissionID     int64  `json:"MissionID,omitempty"`
 }
 

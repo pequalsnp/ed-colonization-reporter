@@ -1,9 +1,7 @@
 package eddn
 
 import (
-	"encoding/json"
 	"errors"
-	"fmt"
 
 	"github.com/pequalsnp/ed-colonization-reporter/internal/journal"
 	"github.com/pequalsnp/ed-colonization-reporter/internal/state"
@@ -12,14 +10,17 @@ import (
 // schemaJournalV1 is the production schemaRef for journal/1 messages.
 const schemaJournalV1 = "https://eddn.edcd.io/schemas/journal/1"
 
-// eddnJournalEvents is the closed set of events EDDN accepts on journal/1.
-// We only emit the subset we have native source data for; the rest are
-// silently ignored.
+// eddnJournalEvents is the closed set of events we emit on the journal/1
+// schema. The schema accepts more, but we relay the subset we have native
+// source data for. Scan and SAASignalsFound don't carry the player's system
+// name/coords inline and are augmented from session state (see augmentSystem).
 var eddnJournalEvents = map[string]bool{
-	journal.EventFSDJump:     true,
-	journal.EventLocation:    true,
-	journal.EventDocked:      true,
-	journal.EventCarrierJump: true,
+	journal.EventFSDJump:         true,
+	journal.EventLocation:        true,
+	journal.EventDocked:          true,
+	journal.EventCarrierJump:     true,
+	journal.EventScan:            true,
+	journal.EventSAASignalsFound: true,
 }
 
 // errMissingStarPos signals that we cannot satisfy EDDN's StarPos requirement
@@ -38,44 +39,28 @@ func buildJournalMessage(raw journal.Raw, sess *state.Session) (map[string]any, 
 	if !eddnJournalEvents[raw.Event] {
 		return nil, nil // not our concern; caller should skip
 	}
-	var msg map[string]any
-	if err := json.Unmarshal(raw.Payload, &msg); err != nil {
-		return nil, fmt.Errorf("parse event: %w", err)
+	// Decode preserving numeric precision — SystemAddress (id64) exceeds
+	// float64's exact integer range and the augment cross-check compares it.
+	msg, err := decodeEvent(raw.Payload)
+	if err != nil {
+		return nil, err
 	}
 
 	stripJournalForbidden(msg)
 	stripLocalised(msg)
 
-	// For Docked: StarSystem/SystemAddress are in the event but StarPos is
-	// not. Augment from session, with the EDDN-mandated cross-check that
-	// our cached SystemAddress matches the event's.
-	if raw.Event == journal.EventDocked {
-		eventSysAddr, _ := msg["SystemAddress"].(float64)
-		cachedSys, cachedAddr := sess.System()
-		cachedPos, hasPos := sess.StarPos()
-		if !hasPos || int64(eventSysAddr) != cachedAddr {
-			return nil, errMissingStarPos
-		}
-		if _, ok := msg["StarSystem"]; !ok {
-			msg["StarSystem"] = cachedSys
-		}
-		msg["StarPos"] = []any{cachedPos[0], cachedPos[1], cachedPos[2]}
+	// Docked/Scan/SAASignalsFound don't carry StarSystem/StarPos inline;
+	// augment from session with the EDDN-mandated SystemAddress cross-check.
+	// FSDJump/Location/CarrierJump are self-contained and pass through.
+	if err := augmentSystem(msg, "StarSystem", sess); err != nil {
+		return nil, err
 	}
 
 	// Required fields must all be present after the transformation.
-	for _, k := range []string{"timestamp", "event", "StarSystem", "StarPos", "SystemAddress"} {
-		if _, ok := msg[k]; !ok {
-			return nil, fmt.Errorf("journal/1 missing required field %q", k)
-		}
+	if err := requireKeys(schemaJournalV1, msg, "timestamp", "event", "StarSystem", "StarPos", "SystemAddress"); err != nil {
+		return nil, err
 	}
 
-	// Augment horizons/odyssey on the message body. Per EDDN: only include
-	// when LoadGame told us; never serialise an unknown as false.
-	if h, _ := sess.DLCFlags(); h != nil {
-		msg["horizons"] = *h
-	}
-	if _, o := sess.DLCFlags(); o != nil {
-		msg["odyssey"] = *o
-	}
+	addDLCFlags(msg, sess)
 	return msg, nil
 }

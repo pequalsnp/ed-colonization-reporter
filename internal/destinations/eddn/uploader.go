@@ -1,5 +1,9 @@
-// Package eddn uploads journal events and Market.json snapshots to the EDDN
-// community data network (https://eddn.edcd.io).
+// Package eddn uploads journal events and station-side JSON snapshots to the
+// EDDN community data network (https://eddn.edcd.io). Covered schemas:
+// journal/1 (FSDJump, Location, Docked, CarrierJump, Scan, SAASignalsFound),
+// commodity/3, outfitting/2, shipyard/2, navroute/1, and the dedicated
+// exploration schemas (fssdiscoveryscan, fssallbodiesfound, fsssignaldiscovered,
+// fssbodysignals, navbeaconscan, scanbarycentre, approachsettlement, codexentry).
 //
 // EDDN ingests anonymous, schema-validated journal data from many uploaders
 // and rebroadcasts it for downstream consumers (Inara, EDSM, third-party
@@ -22,6 +26,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -48,6 +53,12 @@ type SoftwareID struct {
 // uses this on the Market event to fetch the commodity inventory.
 type MarketReader func(journalDir string) (*journal.MarketFile, error)
 
+// OutfittingReader / ShipyardReader / NavRouteReader load the matching
+// sibling JSON file. Overridable so tests don't need real files on disk.
+type OutfittingReader func(journalDir string) (*journal.OutfittingFile, error)
+type ShipyardReader func(journalDir string) (*journal.ShipyardFile, error)
+type NavRouteReader func(journalDir string) (*journal.NavRouteFile, error)
+
 // Uploader is the EDDN destination. Pointer methods are safe for concurrent
 // calls.
 type Uploader struct {
@@ -59,6 +70,16 @@ type Uploader struct {
 	HTTPClient *http.Client
 	// ReadMarket overrides the Market.json loader (tests).
 	ReadMarket MarketReader
+	// ReadOutfitting / ReadShipyard / ReadNavRoute override the matching
+	// sibling-file loaders (tests). Production defaults read from disk.
+	ReadOutfitting OutfittingReader
+	ReadShipyard   ShipyardReader
+	ReadNavRoute   NavRouteReader
+
+	// sigBuf batches FSSSignalDiscovered events per system before upload —
+	// see signals.go. Guarded by sigMu.
+	sigMu  sync.Mutex
+	sigBuf signalBuffer
 	// TestMode appends `/test` to every schemaRef so EDDN's gateway runs
 	// validation without broadcasting to live consumers. Combine with
 	// `Endpoint = BetaEndpoint` for full beta-network integration tests.
@@ -115,12 +136,173 @@ func (u *Uploader) HandleEvent(ctx context.Context, raw journal.Raw) error {
 		return nil
 	}
 	switch raw.Event {
-	case journal.EventFSDJump, journal.EventLocation, journal.EventDocked, journal.EventCarrierJump:
+	case journal.EventFSDJump, journal.EventCarrierJump, journal.EventLocation:
+		// Leaving the previous system: post any signals we'd buffered there
+		// before the journal/1 message updates our location.
+		u.flushSignals(ctx)
 		return u.uploadJournal(ctx, raw)
+	case journal.EventDocked, journal.EventScan:
+		return u.uploadJournal(ctx, raw)
+	case journal.EventSAASignalsFound:
+		// SAASignalsFound feeds two schemas: the full event on journal/1 and
+		// its per-body signal counts on fssbodysignals/1 (matching EDMC).
+		_ = u.uploadJournal(ctx, raw)
+		return u.uploadFromBuilder(ctx, schemaFSSBodySignalsV1, buildFSSBodySignalsMessage, raw)
 	case journal.EventMarket:
 		return u.uploadMarket(ctx, raw)
+	case journal.EventOutfitting:
+		return u.uploadOutfitting(ctx, raw)
+	case journal.EventShipyard:
+		return u.uploadShipyard(ctx, raw)
+	case journal.EventNavRoute:
+		return u.uploadNavRoute(ctx, raw)
+	case journal.EventFSSDiscoveryScan:
+		u.flushSignals(ctx) // honk finished; ship the buffered signals
+		return u.uploadScan(ctx, raw, schemaFSSDiscoveryScanV1, "SystemName",
+			[]string{"BodyCount", "NonBodyCount"}, nil)
+	case journal.EventFSSAllBodiesFound:
+		return u.uploadScan(ctx, raw, schemaFSSAllBodiesFoundV1, "SystemName",
+			[]string{"Count"}, nil)
+	case journal.EventNavBeaconScan:
+		return u.uploadScan(ctx, raw, schemaNavBeaconScanV1, "StarSystem",
+			[]string{"NumBodies"}, nil)
+	case journal.EventScanBaryCentre:
+		return u.uploadScan(ctx, raw, schemaScanBaryCentreV1, "StarSystem",
+			[]string{"BodyID"},
+			[]string{"SemiMajorAxis", "Eccentricity", "OrbitalInclination",
+				"Periapsis", "OrbitalPeriod", "AscendingNode", "MeanAnomaly"})
+	case journal.EventApproachSettlement:
+		return u.uploadFromBuilder(ctx, schemaApproachSettlementV1, buildApproachSettlementMessage, raw)
+	case journal.EventCodexEntry:
+		return u.uploadFromBuilder(ctx, schemaCodexEntryV1, buildCodexEntryMessage, raw)
+	case journal.EventFSSBodySignals:
+		return u.uploadFromBuilder(ctx, schemaFSSBodySignalsV1, buildFSSBodySignalsMessage, raw)
+	case journal.EventFSSSignalDiscovered:
+		return u.bufferFSSSignal(ctx, raw.Payload)
 	}
 	return nil
+}
+
+// builderFunc is the shape of the pure per-event message builders. A nil
+// message means "nothing to upload" (e.g. an ApproachSettlement with no
+// surface coordinates); errMissingStarPos means "skip until we know where
+// we are".
+type builderFunc func(payload []byte, sess *state.Session) (map[string]any, error)
+
+// uploadFromBuilder runs a builder and posts the result, treating
+// errMissingStarPos as a quiet skip and nil messages as no-ops.
+func (u *Uploader) uploadFromBuilder(ctx context.Context, schemaRef string, build builderFunc, raw journal.Raw) error {
+	msg, err := build(raw.Payload, u.Session)
+	if err != nil {
+		if errors.Is(err, errMissingStarPos) {
+			return nil
+		}
+		u.status("WARN", fmt.Sprintf("EDDN: drop %s: %v", raw.Event, err))
+		return nil
+	}
+	if msg == nil {
+		return nil
+	}
+	return u.send(ctx, schemaRef, msg, raw.Event)
+}
+
+// uploadScan is uploadFromBuilder for the "system + scalar fields" schemas.
+func (u *Uploader) uploadScan(ctx context.Context, raw journal.Raw, schemaRef, nameKey string, requiredScalars, optionalScalars []string) error {
+	msg, err := buildScanMessage(raw.Payload, schemaRef, nameKey, requiredScalars, optionalScalars, u.Session)
+	if err != nil {
+		if errors.Is(err, errMissingStarPos) {
+			return nil
+		}
+		u.status("WARN", fmt.Sprintf("EDDN: drop %s: %v", raw.Event, err))
+		return nil
+	}
+	return u.send(ctx, schemaRef, msg, raw.Event)
+}
+
+// uploadOutfitting reads Outfitting.json and posts an outfitting/2 message.
+func (u *Uploader) uploadOutfitting(ctx context.Context, raw journal.Raw) error {
+	if u.JournalDir == "" {
+		return nil
+	}
+	read := u.ReadOutfitting
+	if read == nil {
+		read = journal.ReadOutfittingFile
+	}
+	of, err := read(u.JournalDir)
+	if err != nil {
+		u.status("WARN", "EDDN: cannot read Outfitting.json: "+err.Error())
+		return nil
+	}
+	if of.MarketID != marketIDOf(raw.Payload) {
+		return nil // stale file; game hasn't flushed yet
+	}
+	msg := buildOutfittingMessage(of, u.Session)
+	if msg == nil {
+		return nil
+	}
+	label := fmt.Sprintf("outfitting for %s (%d modules)", of.StationName, len(of.Items))
+	return u.send(ctx, schemaOutfittingV2, msg, label)
+}
+
+// uploadShipyard reads Shipyard.json and posts a shipyard/2 message.
+func (u *Uploader) uploadShipyard(ctx context.Context, raw journal.Raw) error {
+	if u.JournalDir == "" {
+		return nil
+	}
+	read := u.ReadShipyard
+	if read == nil {
+		read = journal.ReadShipyardFile
+	}
+	sf, err := read(u.JournalDir)
+	if err != nil {
+		u.status("WARN", "EDDN: cannot read Shipyard.json: "+err.Error())
+		return nil
+	}
+	if sf.MarketID != marketIDOf(raw.Payload) {
+		return nil // stale file
+	}
+	msg := buildShipyardMessage(sf, u.Session)
+	if msg == nil {
+		return nil
+	}
+	label := fmt.Sprintf("shipyard for %s (%d ships)", sf.StationName, len(sf.PriceList))
+	return u.send(ctx, schemaShipyardV2, msg, label)
+}
+
+// uploadNavRoute reads NavRoute.json and posts a navroute/1 message.
+func (u *Uploader) uploadNavRoute(ctx context.Context, raw journal.Raw) error {
+	if u.JournalDir == "" {
+		return nil
+	}
+	read := u.ReadNavRoute
+	if read == nil {
+		read = journal.ReadNavRouteFile
+	}
+	nr, err := read(u.JournalDir)
+	if err != nil {
+		u.status("WARN", "EDDN: cannot read NavRoute.json: "+err.Error())
+		return nil
+	}
+	msg := buildNavRouteMessage(nr, u.Session)
+	if msg == nil {
+		return nil
+	}
+	label := fmt.Sprintf("nav route (%d jumps)", len(nr.Route))
+	return u.send(ctx, schemaNavRouteV1, msg, label)
+}
+
+// marketIDOf extracts the MarketID from a journal event payload, preserving
+// precision. Returns 0 when absent.
+func marketIDOf(payload []byte) int64 {
+	ev, err := decodeEvent(payload)
+	if err != nil {
+		return 0
+	}
+	if n, ok := ev["MarketID"].(json.Number); ok {
+		v, _ := n.Int64()
+		return v
+	}
+	return 0
 }
 
 // isUploadableGameVersion returns false for the gameversion strings EDDN
