@@ -264,6 +264,21 @@ func (r *Reporter) HandleEvent(ctx context.Context, raw journal.Raw) error {
 			return fmt.Errorf("beacon: %w", err)
 		}
 		return r.handleBeaconDeployed(ctx, e)
+	case journal.EventLoadout:
+		// Capture the current ship so the GUI can offer an "open in EDSY"
+		// link. Store the raw event payload verbatim — EDSY imports the
+		// journal Loadout format directly. Replayed events are fine: we
+		// want the latest known ship even from a backfill pass.
+		var e struct {
+			Ship      string `json:"Ship"`
+			ShipName  string `json:"ShipName"`
+			ShipIdent string `json:"ShipIdent"`
+		}
+		if err := json.Unmarshal(raw.Payload, &e); err != nil {
+			return fmt.Errorf("loadout: %w", err)
+		}
+		r.Session.SetShipLoadout(raw.Payload, e.Ship, e.ShipName, e.ShipIdent)
+		return nil
 	case journal.EventCargo:
 		var e journal.CargoEvent
 		if err := json.Unmarshal(raw.Payload, &e); err != nil {

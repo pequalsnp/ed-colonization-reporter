@@ -94,6 +94,7 @@ func newApp(srv *web.Server) *App {
 
 func (a *App) show(ctx context.Context) {
 	a.statusBar = newStatusBar(a.srv.GetVersion())
+	a.statusBar.shipBtn.OnTapped = a.openEDSY
 	a.projects = newProjectsPanel(a.srv)
 	a.projects.AttachPrefs(a.app.Preferences())
 	a.combined = newCombinedPanel(a.srv)
@@ -137,13 +138,19 @@ func (a *App) show(ctx context.Context) {
 	// which also tears down the backend (see SetOnStopped below). Opt-in
 	// close-to-tray hides the window instead, keeping the app alive in the
 	// system tray — only sensible when the tray icon reliably shows.
-	// Window.Close() bypasses the intercept, so calling it here is safe.
+	//
+	// We quit via app.Quit() rather than window.Close(): the always-on
+	// system tray makes Fyne's GLFW driver spawn a hidden "SystrayMonitor"
+	// window, so the visible window is never the last one open. Closing it
+	// alone leaves len(driver.windows) > 0, the driver's quit-on-last-window
+	// logic never fires, and the app lingers in the tray. app.Quit() closes
+	// every window (SystrayMonitor included) and tears down the tray icon.
 	a.window.SetCloseIntercept(func() {
 		if a.srv.Config().CloseToTray {
 			a.window.Hide()
 			return
 		}
-		a.window.Close()
+		a.app.Quit()
 	})
 
 	// Thin orange divider line under the status bar — same trick the ED
@@ -257,7 +264,11 @@ func (a *App) runStatusBarLoop(ctx context.Context) {
 	var lastTitle string
 	update := func() {
 		snap := a.srv.Session().Snapshot()
-		fyne.Do(func() { a.statusBar.update(snap.Commander, snap.StarSystem, snap.Docked, snap.StationName) })
+		shipLabel, hasShip := a.srv.CurrentShip()
+		fyne.Do(func() {
+			a.statusBar.update(snap.Commander, snap.StarSystem, snap.Docked, snap.StationName)
+			a.statusBar.setShip(shipLabel, hasShip)
+		})
 		// Window title reflects the current commander when known; helps
 		// find the right window in Alt-Tab when multiple Fyne apps run.
 		title := "ED Colonization Reporter"
@@ -348,6 +359,7 @@ type statusBar struct {
 
 	cmdrVal, systemVal, dockVal *canvas.Text
 	indicator                   *canvas.Circle
+	shipBtn                     *widget.Button
 	root                        fyne.CanvasObject
 }
 
@@ -383,6 +395,13 @@ func newStatusBar(version string) *statusBar {
 	verText := canvas.NewText("v"+version, edFgDim)
 	verText.TextSize = 11
 
+	// "Open current ship in EDSY" — mirrors EDMC's clickable ship name.
+	// OnTapped is wired by the App (which owns the server); hidden until a
+	// Loadout event populates a ship.
+	sb.shipBtn = widget.NewButtonWithIcon("", theme.ComputerIcon(), nil)
+	sb.shipBtn.Importance = widget.LowImportance
+	sb.shipBtn.Hide()
+
 	left := container.NewHBox(
 		container.NewPadded(indWrap),
 		field("CMDR ", sb.cmdrVal),
@@ -391,7 +410,7 @@ func newStatusBar(version string) *statusBar {
 		widget.NewSeparator(),
 		field("DOCK ", sb.dockVal),
 	)
-	right := container.NewHBox(verText)
+	right := container.NewHBox(sb.shipBtn, verText)
 	sb.root = container.NewPadded(container.NewBorder(nil, nil, left, right, layout.NewSpacer()))
 	return sb
 }
@@ -421,11 +440,41 @@ func (sb *statusBar) update(cmdr, system string, docked bool, station string) {
 	sb.indicator.Refresh()
 }
 
+// setShip toggles the EDSY ship button: shown with the ship label when a
+// loadout is known this session, hidden otherwise. Call on the UI thread.
+func (sb *statusBar) setShip(label string, ok bool) {
+	if sb.shipBtn == nil {
+		return
+	}
+	if !ok {
+		sb.shipBtn.Hide()
+		return
+	}
+	if sb.shipBtn.Text != label {
+		sb.shipBtn.SetText(label)
+	}
+	sb.shipBtn.Show()
+}
+
 func dashIfEmpty(s string) string {
 	if s == "" {
 		return "—"
 	}
 	return s
+}
+
+// openEDSY opens the player's current ship loadout on edsy.org. Shows a
+// hint dialog if no Loadout event has been seen yet this session.
+func (a *App) openEDSY() {
+	url, ok := a.srv.EDSYShipURL()
+	if !ok {
+		dialog.ShowInformation("No ship loadout yet",
+			"No ship loadout has been seen this session. Switch to (or board) your ship "+
+				"in-game — that writes a Loadout event — then try again.",
+			a.window)
+		return
+	}
+	_ = web.OpenBrowser(url)
 }
 
 // buildMenu builds the main menu bar. File contains Refresh + folder
@@ -458,7 +507,9 @@ func (a *App) buildMenu(tabs *container.AppTabs) *fyne.MainMenu {
 		}
 	})
 
-	quit := fyne.NewMenuItem("Quit", func() { a.window.Close() })
+	openShipEDSY := fyne.NewMenuItem("Open current ship in EDSY", a.openEDSY)
+
+	quit := fyne.NewMenuItem("Quit", func() { a.app.Quit() })
 
 	fileMenu := fyne.NewMenu("File",
 		refresh,
@@ -466,6 +517,7 @@ func (a *App) buildMenu(tabs *container.AppTabs) *fyne.MainMenu {
 		openConfig,
 		openJournal,
 		openLog,
+		openShipEDSY,
 		fyne.NewMenuItemSeparator(),
 		quit,
 	)
@@ -745,7 +797,7 @@ func (a *App) registerShortcuts(tabs *container.AppTabs) {
 	bind(fyne.Key2, func() { tabs.SelectIndex(1) })
 	bind(fyne.Key3, func() { tabs.SelectIndex(2) })
 	bind(fyne.Key4, func() { tabs.SelectIndex(3) })
-	bind(fyne.KeyQ, func() { a.window.Close() })
+	bind(fyne.KeyQ, func() { a.app.Quit() })
 
 	// F5 (no modifier) as a refresh alias — matches browser muscle memory.
 	canvas.AddShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyF5}, func(fyne.Shortcut) {

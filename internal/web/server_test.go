@@ -38,6 +38,33 @@ func newTestServer(t *testing.T) (*Server, *httptest.Server) {
 	return s, ts
 }
 
+func TestEDSYShipURL_AndCurrentShip(t *testing.T) {
+	s, _ := newTestServer(t)
+
+	// Before any Loadout: both report "no ship".
+	if _, ok := s.CurrentShip(); ok {
+		t.Error("CurrentShip should be false before a Loadout")
+	}
+	if _, ok := s.EDSYShipURL(); ok {
+		t.Error("EDSYShipURL should be false before a Loadout")
+	}
+
+	loadout := []byte(`{"event":"Loadout","Ship":"anaconda","ShipID":7,"ShipName":"Voyager","Modules":[]}`)
+	s.session.SetShipLoadout(loadout, "anaconda", "Voyager", "VY-1")
+
+	label, ok := s.CurrentShip()
+	if !ok || label != "Voyager" {
+		t.Errorf("CurrentShip = %q, %v; want \"Voyager\", true", label, ok)
+	}
+	url, ok := s.EDSYShipURL()
+	if !ok {
+		t.Fatal("EDSYShipURL should succeed after a Loadout")
+	}
+	if !strings.HasPrefix(url, "https://edsy.org/#/I=") {
+		t.Errorf("EDSY URL prefix wrong: %s", url)
+	}
+}
+
 func TestRoot_ServesEmbeddedHTML(t *testing.T) {
 	_, ts := newTestServer(t)
 	r, err := http.Get(ts.URL + "/")

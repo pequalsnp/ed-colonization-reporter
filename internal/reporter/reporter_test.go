@@ -1,6 +1,7 @@
 package reporter
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -62,6 +63,34 @@ func TestHandleCarrierStats_RegistersAndPublishes(t *testing.T) {
 	// `name` is the callsign, `displayName` is the vanity name.
 	if put.Name != "ABC-12X" || put.DisplayName != "DREAMSTRIDER" || put.MarketID != 3700000123 {
 		t.Errorf("PutFleetCarrier got %+v", put)
+	}
+}
+
+func TestHandleLoadout_CapturesShipIntoSession(t *testing.T) {
+	sess := state.New()
+	r := New(&fakeAPI{}, sess)
+	raw := mustRaw(t, journal.EventLoadout, map[string]any{
+		"Ship":      "anaconda",
+		"ShipID":    7,
+		"ShipName":  "Voyager",
+		"ShipIdent": "VY-1",
+		"Modules": []any{
+			map[string]any{"Slot": "PowerPlant", "Item": "int_powerplant_size8_class5", "On": true},
+		},
+	})
+	if err := r.HandleEvent(context.Background(), raw); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	shipType, shipName, ident := sess.Ship()
+	if shipType != "anaconda" || shipName != "Voyager" || ident != "VY-1" {
+		t.Errorf("ship fields wrong: %q %q %q", shipType, shipName, ident)
+	}
+	loadout, ok := sess.ShipLoadout()
+	if !ok {
+		t.Fatal("ShipLoadout not stored")
+	}
+	if !bytes.Contains(loadout, []byte("int_powerplant_size8_class5")) {
+		t.Errorf("stored loadout missing module data: %s", loadout)
 	}
 }
 

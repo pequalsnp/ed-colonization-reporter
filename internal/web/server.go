@@ -22,6 +22,7 @@ import (
 	"github.com/pequalsnp/ed-colonization-reporter/internal/destinations/eddn"
 	"github.com/pequalsnp/ed-colonization-reporter/internal/destinations/edsm"
 	"github.com/pequalsnp/ed-colonization-reporter/internal/destinations/inara"
+	"github.com/pequalsnp/ed-colonization-reporter/internal/edsy"
 	"github.com/pequalsnp/ed-colonization-reporter/internal/journal"
 	"github.com/pequalsnp/ed-colonization-reporter/internal/ravencolonial"
 	"github.com/pequalsnp/ed-colonization-reporter/internal/reporter"
@@ -237,6 +238,40 @@ func (s *Server) LastShipCargo() (cargo map[string]int, at time.Time) {
 // session / the player has undocked since.
 func (s *Server) CurrentMarket() (station string, stock map[string]int, at time.Time) {
 	return s.session.CurrentMarket()
+}
+
+// CurrentShip returns a short display label for the player's current ship
+// (name if set, else type) and whether a Loadout has been seen this session.
+// Cheap — safe to poll from the UI refresh loop.
+func (s *Server) CurrentShip() (label string, ok bool) {
+	if _, has := s.session.ShipLoadout(); !has {
+		return "", false
+	}
+	shipType, shipName, _ := s.session.Ship()
+	switch {
+	case shipName != "":
+		return shipName, true
+	case shipType != "":
+		return shipType, true
+	default:
+		return "current ship", true
+	}
+}
+
+// EDSYShipURL builds an edsy.org import link for the player's current ship
+// from the last Loadout event. Returns ("", false) before any Loadout has
+// been seen this session. Builds the (gzip+base64) link on demand, so call
+// it on user action rather than in a poll loop.
+func (s *Server) EDSYShipURL() (string, bool) {
+	loadout, has := s.session.ShipLoadout()
+	if !has {
+		return "", false
+	}
+	u, err := edsy.URL(loadout)
+	if err != nil {
+		return "", false
+	}
+	return u, true
 }
 
 // LastFCInventory returns the aggregated cargo across all owned FCs

@@ -66,6 +66,15 @@ type Session struct {
 	shipCargo   map[string]int
 	shipCargoAt time.Time
 
+	// shipLoadout is the raw journal Loadout event payload for the
+	// player's current ship, kept verbatim so we can hand it to EDSY
+	// (which imports the journal Loadout format). shipType/Name/Ident are
+	// the display fields pulled from the same event.
+	shipLoadout []byte
+	shipType    string
+	shipName    string
+	shipIdent   string
+
 	// currentMarketStock is the per-commodity Stock map from the
 	// Market.json file at the station the player most recently opened
 	// the commodity market at. Populated on the Market journal event;
@@ -114,6 +123,41 @@ func (s *Session) SetShipCargo(cargo map[string]int, at time.Time) {
 		at = time.Now()
 	}
 	s.shipCargoAt = at
+}
+
+// SetShipLoadout records the player's current ship from a Loadout event.
+// raw is the verbatim event payload (for EDSY export); the type/name/ident
+// are the display fields. A defensive copy of raw is kept.
+func (s *Session) SetShipLoadout(raw []byte, shipType, shipName, shipIdent string) {
+	cp := make([]byte, len(raw))
+	copy(cp, raw)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.shipLoadout = cp
+	s.shipType = shipType
+	s.shipName = shipName
+	s.shipIdent = shipIdent
+}
+
+// ShipLoadout returns a copy of the raw Loadout event payload for the
+// current ship, or (nil, false) if no Loadout has been seen this session.
+func (s *Session) ShipLoadout() ([]byte, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if len(s.shipLoadout) == 0 {
+		return nil, false
+	}
+	cp := make([]byte, len(s.shipLoadout))
+	copy(cp, s.shipLoadout)
+	return cp, true
+}
+
+// Ship returns the current ship's type/name/ident display fields, empty
+// before any Loadout event has been seen.
+func (s *Session) Ship() (shipType, shipName, shipIdent string) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.shipType, s.shipName, s.shipIdent
 }
 
 // ShipCargo returns a copy of the cached ship cargo manifest plus the
