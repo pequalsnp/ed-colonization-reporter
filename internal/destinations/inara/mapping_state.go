@@ -200,42 +200,6 @@ func mapLoadout(raw journal.Raw) ([]Event, error) {
 	return []Event{{Name: EventSetCommanderShip, Timestamp: isoTime(raw.Timestamp), Data: data}}, nil
 }
 
-// nameCount is the {Name,Count} shape shared by Materials and Cargo entries.
-type nameCount struct {
-	Name  string `json:"Name"`
-	Count int    `json:"Count"`
-}
-
-// materialsEvent is the Materials journal event (the full crafting inventory).
-type materialsEvent struct {
-	journal.Envelope
-	Raw          []nameCount `json:"Raw"`
-	Manufactured []nameCount `json:"Manufactured"`
-	Encoded      []nameCount `json:"Encoded"`
-}
-
-// mapMaterials turns a Materials event into setCommanderInventoryMaterials,
-// which replaces the whole materials inventory in one shot.
-func mapMaterials(raw journal.Raw) ([]Event, error) {
-	var e materialsEvent
-	if err := json.Unmarshal(raw.Payload, &e); err != nil {
-		return nil, err
-	}
-	rows := make([]map[string]any, 0, len(e.Raw)+len(e.Manufactured)+len(e.Encoded))
-	for _, group := range [][]nameCount{e.Raw, e.Manufactured, e.Encoded} {
-		for _, m := range group {
-			if m.Name == "" {
-				continue
-			}
-			rows = append(rows, map[string]any{"itemName": m.Name, "itemCount": m.Count})
-		}
-	}
-	if len(rows) == 0 {
-		return nil, nil
-	}
-	return []Event{{Name: EventSetCommanderInventoryMaterials, Timestamp: isoTime(raw.Timestamp), Data: rows}}, nil
-}
-
 // mapCargo turns a ship Cargo event into setCommanderInventoryCargo. The
 // event is skipped for SRV cargo and when the inventory is written out-of-line
 // to Cargo.json (empty inline Inventory).

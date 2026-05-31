@@ -50,8 +50,9 @@ func mapEvent(raw journal.Raw, suppressDock *bool, sess *state.Session) ([]Event
 		return mapLoadout(raw)
 	case journal.EventCargo:
 		return mapCargo(raw)
-	case journal.EventMaterials:
-		return mapMaterials(raw)
+	// Materials are not mapped here: the engineering-materials inventory is
+	// tracked statefully from journal increments and flushed by the uploader
+	// (see materials.go), since the Materials event is only a startup snapshot.
 
 	// Mission log.
 	case journal.EventMissionAccepted:

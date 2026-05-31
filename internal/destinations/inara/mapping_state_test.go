@@ -152,19 +152,6 @@ func TestMapLoadout(t *testing.T) {
 	}
 }
 
-func TestMapMaterials(t *testing.T) {
-	ev := mapOne(t, raw(t, journal.EventMaterials, map[string]any{
-		"Raw":          []any{map[string]any{"Name": "iron", "Count": 300}},
-		"Manufactured": []any{map[string]any{"Name": "wornshieldemitters", "Count": 50}},
-		"Encoded":      []any{map[string]any{"Name": "shielddensityreports", "Count": 12}},
-	}), state.New())
-	e := findEvent(t, ev, EventSetCommanderInventoryMaterials)
-	rows := e.Data.([]map[string]any)
-	if len(rows) != 3 {
-		t.Fatalf("material rows = %d, want 3", len(rows))
-	}
-}
-
 func TestMapCargo_ShipOnlyWithInlineInventory(t *testing.T) {
 	// SRV cargo skipped.
 	if ev := mapOne(t, raw(t, journal.EventCargo, map[string]any{

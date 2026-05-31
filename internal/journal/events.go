@@ -60,6 +60,17 @@ const (
 	EventMissionCompleted = "MissionCompleted"
 	EventMissionFailed    = "MissionFailed"
 	EventMissionAbandoned = "MissionAbandoned"
+
+	// Material-inventory increments. There is no Materials.json sidecar, so
+	// these are the only way to keep the engineering-materials tally current
+	// between the per-session Materials snapshots.
+	EventMaterialCollected  = "MaterialCollected"
+	EventMaterialDiscarded  = "MaterialDiscarded"
+	EventMaterialTrade      = "MaterialTrade"
+	EventEngineerCraft      = "EngineerCraft"
+	EventSynthesis          = "Synthesis"
+	EventTechnologyBroker   = "TechnologyBroker"
+	EventScientificResearch = "ScientificResearch"
 )
 
 // Envelope is the minimal common shape of every journal event line. Parse

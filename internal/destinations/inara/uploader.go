@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -51,10 +52,19 @@ type Uploader struct {
 	Session    *state.Session
 	HTTPClient *http.Client
 
-	mu      sync.Mutex
-	apiKey  string
-	queue   []Event
+	mu           sync.Mutex
+	apiKey       string
+	queue        []Event
 	suppressDock bool
+
+	// Engineering-materials inventory, kept current from the journal
+	// increments (there's no Materials.json sidecar to re-read). materialsDirty
+	// is set whenever the tally changes — including during backfill, so the
+	// session's startup snapshot seeds it — and the next flush pushes the full
+	// current inventory exactly once, coalescing bursts of pickups/crafts.
+	materials      map[string]int
+	materialsDirty bool
+	materialsTime  time.Time
 
 	enabled atomic.Bool
 
@@ -68,6 +78,7 @@ func New(software SoftwareID, sess *state.Session) *Uploader {
 		Software:   software,
 		Session:    sess,
 		HTTPClient: &http.Client{Timeout: 30 * time.Second},
+		materials:  make(map[string]int),
 	}
 }
 
@@ -94,13 +105,6 @@ func (u *Uploader) HandleEvent(ctx context.Context, raw journal.Raw) error {
 	if !u.enabled.Load() {
 		return destinations.ErrDisabled
 	}
-	// Skip backfill: Inara's add*TravelLog endpoints APPEND, so replaying
-	// historical FSDJumps / Docked events from the same session would
-	// create duplicate entries on the user's profile. The other
-	// destinations skip backfill as well to match.
-	if raw.Replayed {
-		return nil
-	}
 	if u.Session.Commander() == "" {
 		return nil
 	}
@@ -112,6 +116,24 @@ func (u *Uploader) HandleEvent(ctx context.Context, raw journal.Raw) error {
 
 	u.mu.Lock()
 	defer u.mu.Unlock()
+
+	// Materials inventory is reconstructed from journal increments, so we
+	// fold material events into the tally even during backfill — that seeds
+	// it from the session's startup Materials snapshot, which is otherwise
+	// skipped as replayed. The dirty flag makes the next flush push the full
+	// current inventory once, so a whole replay collapses to one event.
+	if applyMaterialEvent(u.materials, raw) {
+		u.materialsDirty = true
+		u.materialsTime = raw.Timestamp
+	}
+
+	// Skip backfill for everything else: Inara's add* endpoints APPEND, so
+	// replaying historical FSDJumps / Docked events from the same session
+	// would create duplicate entries on the user's profile. The other
+	// destinations skip backfill as well to match.
+	if raw.Replayed {
+		return nil
+	}
 
 	events, err := mapEvent(raw, &u.suppressDock, u.Session)
 	if err != nil {
@@ -166,7 +188,18 @@ func (u *Uploader) Flush(ctx context.Context) error {
 	}
 	u.mu.Lock()
 	key := u.apiKey
-	if key == "" || len(u.queue) == 0 {
+	if key == "" {
+		u.mu.Unlock()
+		return nil
+	}
+	// Push the current materials inventory if it changed since the last
+	// flush. Coalescing here means a burst of pickups/crafts (or a whole
+	// backfill) sends one setCommanderInventoryMaterials, not dozens.
+	if u.materialsDirty && len(u.materials) > 0 {
+		u.queue = append(u.queue, buildMaterialsEvent(u.materials, isoTime(u.materialsTime)))
+		u.materialsDirty = false
+	}
+	if len(u.queue) == 0 {
 		u.mu.Unlock()
 		return nil
 	}
@@ -249,8 +282,33 @@ func (u *Uploader) Flush(ctx context.Context) error {
 			fail++
 		}
 	}
-	u.status("OK", fmt.Sprintf("Inara: posted %d events (%d ok, %d warn, %d fail)", len(events), ok, warn, fail))
+	u.status("OK", fmt.Sprintf("Inara: posted %d events [%s] (%d ok, %d warn, %d fail)",
+		len(events), summarizeEvents(events), ok, warn, fail))
 	return nil
+}
+
+// summarizeEvents renders a compact, deterministic breakdown of the event
+// names in a batch (e.g. "setCommanderInventoryMaterials, setCommanderTravelLocation×2")
+// so the activity log shows exactly what was sent, not just a count.
+func summarizeEvents(events []Event) string {
+	counts := make(map[string]int, len(events))
+	order := make([]string, 0, len(events))
+	for _, e := range events {
+		if _, seen := counts[e.Name]; !seen {
+			order = append(order, e.Name)
+		}
+		counts[e.Name]++
+	}
+	sort.Strings(order)
+	parts := make([]string, len(order))
+	for i, name := range order {
+		if counts[name] > 1 {
+			parts[i] = fmt.Sprintf("%s×%d", name, counts[name])
+		} else {
+			parts[i] = name
+		}
+	}
+	return strings.Join(parts, ", ")
 }
 
 // requeueFront puts events back at the front of the queue so the next flush
