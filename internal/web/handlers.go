@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/pequalsnp/ed-colonization-reporter/internal/config"
-	"github.com/pequalsnp/ed-colonization-reporter/internal/ravencolonial"
 	"github.com/pequalsnp/ed-colonization-reporter/internal/reporter"
 )
 
@@ -81,6 +80,9 @@ type configDTO struct {
 	EDSMAPIKey        string `json:"edsm_api_key"`
 	InaraEnabled      bool   `json:"inara_enabled"`
 	InaraAPIKey       string `json:"inara_api_key"`
+	EdcolonizeEnabled bool   `json:"edcolonize_enabled"`
+	EdcolonizeURL     string `json:"edcolonize_url"`
+	EdcolonizeToken   string `json:"edcolonize_token"`
 }
 
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
@@ -100,6 +102,9 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			EDSMAPIKey:        c.EDSMAPIKey,
 			InaraEnabled:      c.InaraEnabled,
 			InaraAPIKey:       c.InaraAPIKey,
+			EdcolonizeEnabled: c.EdcolonizeEnabled,
+			EdcolonizeURL:     c.EdcolonizeURL,
+			EdcolonizeToken:   c.EdcolonizeToken,
 		})
 	case http.MethodPost:
 		var in configDTO
@@ -118,52 +123,18 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			EDSMAPIKey:        in.EDSMAPIKey,
 			InaraEnabled:      in.InaraEnabled,
 			InaraAPIKey:       in.InaraAPIKey,
+			EdcolonizeEnabled: in.EdcolonizeEnabled,
+			EdcolonizeURL:     in.EdcolonizeURL,
+			EdcolonizeToken:   in.EdcolonizeToken,
 		}
-		if newCfg.APIBaseURL == "" {
-			newCfg.APIBaseURL = ravencolonial.DefaultBaseURL
-		}
-		if err := config.Save(newCfg); err != nil {
+		// Delegate to the single apply path shared with the Fyne settings
+		// panel. These were near-identical copies, which is how the
+		// edcolonize destination ended up hot-updated in one and silently
+		// dropped from the multiplex in the other.
+		if err := s.ApplyConfig(newCfg); err != nil {
 			http.Error(w, "save failed: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-		s.mu.Lock()
-		s.cfg = newCfg
-		// Rebuild the client and reporter with the new settings. The tailer
-		// goroutine keeps running; it just picks up the new reporter pointer
-		// on the next event.
-		s.client = ravencolonial.New(
-			ravencolonial.WithBaseURL(newCfg.APIBaseURL),
-			ravencolonial.WithAPIKey(newCfg.APIKey),
-		)
-		s.rep = reporter.New(s.client, s.session)
-		s.rep.JournalDir = resolveJournalDir(newCfg.JournalDir)
-		s.rep.OnStatus(s.hub.Publish)
-		if newCfg.CommanderOverride != "" {
-			s.session.SetCommander(newCfg.CommanderOverride, "")
-		}
-		// Hot-update the EDDN destination too — enable/disable flag and
-		// journal dir can change without restart.
-		if s.eddn != nil {
-			s.eddn.SetEnabled(newCfg.EDDNEnabled)
-			s.eddn.JournalDir = resolveJournalDir(newCfg.JournalDir)
-		}
-		if s.edsm != nil {
-			s.edsm.SetAPIKey(newCfg.EDSMAPIKey)
-			s.edsm.SetEnabled(newCfg.EDSMEnabled)
-		}
-		if s.inara != nil {
-			s.inara.SetAPIKey(newCfg.InaraAPIKey)
-			s.inara.SetEnabled(newCfg.InaraEnabled)
-		}
-		// Rebuild the destination set so the new ravencolonial reporter is in it.
-		if s.mux != nil {
-			s.mux.Replace(s.rep, s.eddn, s.edsm, s.inara)
-		}
-		s.mu.Unlock()
-		s.hub.Publish(reporter.Status{
-			Time: time.Now(), Level: reporter.LevelOK,
-			Message: "Settings saved.",
-		})
 		w.WriteHeader(http.StatusNoContent)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

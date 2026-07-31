@@ -72,7 +72,9 @@ still short 340t of steel.*
 Unlike every other destination this reports **inward** — to a server you run,
 on your own machine or LAN. Nothing is sent to a third party.
 
-Enable it in Settings, or by environment:
+Enable it under **Settings → Self-hosted (optional)** — in the desktop window
+or the browser UI. Both take an endpoint and a shared token, and apply without
+a restart. Or set it by environment:
 
 ```
 EDCOLONIZE_URL=http://<your-host>:3000/api/cmdr/snapshot

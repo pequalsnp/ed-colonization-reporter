@@ -133,6 +133,43 @@ func (u *Uploader) Name() string { return "edcolonize" }
 // Compile-time check.
 var _ destinations.Destination = (*Uploader)(nil)
 
+// SetConfig swaps the push target at runtime, so saving Settings takes effect
+// without restarting the app — the same hot-update the other destinations get
+// from SetEnabled/SetAPIKey.
+//
+// cfg is guarded by u.mu because post() runs on the flush goroutine: reading
+// it unguarded while Settings rewrites it would be a data race.
+func (u *Uploader) SetConfig(cfg Config) {
+	if cfg.MinInterval <= 0 {
+		cfg.MinInterval = DefaultMinInterval
+	}
+	if cfg.Timeout <= 0 {
+		cfg.Timeout = DefaultTimeout
+	}
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if cfg.Timeout != u.cfg.Timeout {
+		u.client = &http.Client{Timeout: cfg.Timeout}
+	}
+	u.cfg = cfg
+	// Turning the destination off should not leave a scheduled flush behind
+	// that fires against the old endpoint.
+	if !cfg.Enabled || cfg.URL == "" {
+		u.dirty = false
+		if u.timer != nil {
+			u.timer.Stop()
+			u.timer = nil
+		}
+	}
+}
+
+// enabled reports whether pushing is configured, under the lock.
+func (u *Uploader) enabled() bool {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.cfg.Enabled && u.cfg.URL != ""
+}
+
 // HandleEvent implements destinations.Destination.
 //
 // Replayed events are deliberately NOT skipped. Unlike ColonisationContribution
@@ -141,7 +178,7 @@ var _ destinations.Destination = (*Uploader)(nil)
 // the picture we want to send. The debounce keeps a replay to one POST per
 // interval rather than thousands.
 func (u *Uploader) HandleEvent(ctx context.Context, raw journal.Raw) error {
-	if !u.cfg.Enabled || u.cfg.URL == "" {
+	if !u.enabled() {
 		return destinations.ErrDisabled
 	}
 
@@ -383,35 +420,42 @@ func (u *Uploader) flush() {
 	u.dirty = false
 	u.lastPush = time.Now()
 	snap := u.buildLocked()
+	cfg, client := u.cfg, u.client
 	u.mu.Unlock()
 
 	if snap == nil {
 		return // nothing worth sending yet (no commander known)
 	}
-	u.post(snap)
+	u.post(snap, cfg, client)
 }
 
 // post sends one snapshot, dropping it on any failure.
-func (u *Uploader) post(snap *Snapshot) {
+//
+// cfg and client are passed in rather than read from the Uploader: post runs
+// on the flush goroutine with u.mu released, and SetConfig can rewrite both
+// while a push is in flight. Taking them by value under the lock means a
+// snapshot always goes to the endpoint that was configured when it was built,
+// instead of half-way to a new one.
+func (u *Uploader) post(snap *Snapshot, cfg Config, client *http.Client) {
 	body, err := json.Marshal(snap)
 	if err != nil {
 		u.noteFailure(fmt.Errorf("marshal snapshot: %w", err))
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), u.cfg.Timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.cfg.URL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.URL, bytes.NewReader(body))
 	if err != nil {
 		u.noteFailure(fmt.Errorf("build request: %w", err))
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+u.cfg.Token)
+	req.Header.Set("Authorization", "Bearer "+cfg.Token)
 	req.Header.Set("User-Agent", u.softwre.Name+"/"+u.softwre.Version)
 
-	resp, err := u.client.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		// Unreachable host, DNS failure, timeout: expected whenever the
 		// Unraid box is down. Drop and carry on.
@@ -488,10 +532,11 @@ func (u *Uploader) Flush() {
 		u.timer = nil
 	}
 	snap := u.buildLocked()
+	cfg, client := u.cfg, u.client
 	u.mu.Unlock()
 
 	if snap != nil {
-		u.post(snap)
+		u.post(snap, cfg, client)
 	}
 }
 
