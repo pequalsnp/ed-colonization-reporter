@@ -121,6 +121,29 @@
           </label>
         </fieldset>
         <fieldset style="border: 1px solid #2a2a30; border-radius: 4px; padding: 12px 16px; margin: 4px 0;">
+          <legend style="color: #9ca0a8; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; padding: 0 6px;">Self-hosted (optional)</legend>
+          <p class="notice" style="margin: 4px 0 12px;">
+            Optional. If you run your own
+            <a href="https://github.com/pequalsnp/edcolonize" target="_blank" rel="noopener" style="color: #6fa9ff;">edcolonize</a>
+            instance, the reporter can push it a snapshot of your commander state — location, ship,
+            cargo, materials, missions, and construction-site progress — so an AI assistant querying
+            that instance's MCP server can answer from your actual game state.
+            This reports <strong>inward</strong>, to a server you run. Nothing goes to a third party.
+          </p>
+          <label class="row" style="margin: 4px 0;">
+            <input name="edcolonize_enabled" type="checkbox">
+            <span>Push commander state to a self-hosted edcolonize instance</span>
+          </label>
+          <label style="margin: 4px 0 0 26px; max-width: 600px;">
+            <span>Snapshot endpoint</span>
+            <input name="edcolonize_url" type="text" placeholder="http://your-host:3000/api/cmdr/snapshot">
+          </label>
+          <label style="margin: 8px 0 0 26px; max-width: 600px;">
+            <span>Shared token — must match that instance's <code style="background:#1f1f25;padding:1px 4px;border-radius:3px">CMDR_INGEST_TOKEN</code></span>
+            <input name="edcolonize_token" type="password" placeholder="shared secret">
+          </label>
+        </fieldset>
+        <fieldset style="border: 1px solid #2a2a30; border-radius: 4px; padding: 12px 16px; margin: 4px 0;">
           <legend style="color: #9ca0a8; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; padding: 0 6px;">Frontier cAPI (authoritative FC inventory)</legend>
           <p class="notice" style="margin: 4px 0 12px;">
             Signing in with Frontier lets us call the official <code style="background:#1f1f25;padding:1px 4px;border-radius:3px">/fleetcarrier</code> endpoint
@@ -236,6 +259,9 @@
         f.edsm_api_key.value = j.edsm_api_key || '';
         f.inara_enabled.checked = !!j.inara_enabled;
         f.inara_api_key.value = j.inara_api_key || '';
+        f.edcolonize_enabled.checked = !!j.edcolonize_enabled;
+        f.edcolonize_url.value = j.edcolonize_url || '';
+        f.edcolonize_token.value = j.edcolonize_token || '';
         f.frontier_capi_enabled.checked = !!j.frontier_capi_enabled;
       } catch {}
     })();
@@ -307,6 +333,9 @@
         edsm_api_key: f.edsm_api_key.value,
         inara_enabled: f.inara_enabled.checked,
         inara_api_key: f.inara_api_key.value,
+        edcolonize_enabled: f.edcolonize_enabled.checked,
+        edcolonize_url: f.edcolonize_url.value.trim(),
+        edcolonize_token: f.edcolonize_token.value,
         frontier_capi_enabled: f.frontier_capi_enabled.checked,
       };
       $('settings-notice').textContent = 'Saving…';

@@ -37,7 +37,12 @@ type settingsPanel struct {
 	edsmKey, inaraKey                                     *widget.Entry
 	inaraAppName                                          *widget.Entry
 	replaySession, eddnEnabled, edsmEnabled, inaraEnabled *widget.Check
-	startMinimized, closeToTray                           *widget.Check
+
+	// Optional self-hosted push target — see internal/destinations/edcolonize.
+	edcolonizeEnabled           *widget.Check
+	edcolonizeURL               *widget.Entry
+	edcolonizeToken             *widget.Entry
+	startMinimized, closeToTray *widget.Check
 
 	pollSeconds *widget.Entry
 	save        *widget.Button
@@ -101,6 +106,11 @@ func newSettingsPanel(srv *web.Server) *settingsPanel {
 	p.inaraEnabled.SetChecked(cfg.InaraEnabled)
 	p.inaraKey = passwordEntry(cfg.InaraAPIKey, "from inara.cz/settings-api/")
 	p.inaraAppName = entry(cfg.InaraAppName, "edcolreport (Inara whitelist required)")
+
+	p.edcolonizeEnabled = widget.NewCheck("Enable", nil)
+	p.edcolonizeEnabled.SetChecked(cfg.EdcolonizeEnabled)
+	p.edcolonizeURL = entry(cfg.EdcolonizeURL, "http://your-host:3000/api/cmdr/snapshot")
+	p.edcolonizeToken = passwordEntry(cfg.EdcolonizeToken, "must match that instance's CMDR_INGEST_TOKEN")
 
 	p.edsmTestStatus = canvas.NewText("", edFgMuted)
 	p.edsmTestStatus.TextSize = 11
@@ -508,12 +518,29 @@ func (p *settingsPanel) content() fyne.CanvasObject {
 		subhead("Inara"), inaraRow,
 	)
 
+	edcolonizeNote := canvas.NewText("Reports inward, to a server you run — nothing goes to a third party.", edFgDim)
+	edcolonizeNote.TextSize = 11
+	edcolonizeRow := container.NewVBox(
+		checkboxRow(p.edcolonizeEnabled),
+		formItem("Snapshot endpoint", p.edcolonizeURL),
+		formItem("Shared token", passwordRow(p.edcolonizeToken)),
+		container.NewPadded(edcolonizeNote),
+	)
+
+	selfHostedCard := section("Self-hosted (optional)",
+		"If you run your own edcolonize instance, push it a snapshot of your commander state — "+
+			"location, ship, cargo, materials, missions, construction progress — so an AI assistant "+
+			"querying its MCP server can answer from your actual game state.",
+		subhead("edcolonize"), edcolonizeRow,
+	)
+
 	saveRow := container.NewBorder(nil, nil, nil, p.save, p.notice)
 
 	body := container.NewVBox(
 		localCard,
 		rcCard,
 		uploadsCard,
+		selfHostedCard,
 		container.NewPadded(saveRow),
 	)
 	return container.NewVScroll(container.NewPadded(body))
@@ -536,6 +563,9 @@ func (p *settingsPanel) doSave() {
 		InaraEnabled:        p.inaraEnabled.Checked,
 		InaraAPIKey:         p.inaraKey.Text,
 		InaraAppName:        strings.TrimSpace(p.inaraAppName.Text),
+		EdcolonizeEnabled:   p.edcolonizeEnabled.Checked,
+		EdcolonizeURL:       strings.TrimSpace(p.edcolonizeURL.Text),
+		EdcolonizeToken:     strings.TrimSpace(p.edcolonizeToken.Text),
 	}
 	go func() {
 		err := p.srv.ApplyConfig(newCfg)

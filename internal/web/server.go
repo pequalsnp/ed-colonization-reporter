@@ -133,10 +133,15 @@ func (s *Server) Config() config.Config {
 	return s.cfg
 }
 
-// ApplyConfig persists a new config and hot-updates every destination
-// that supports runtime reconfiguration (EDDN, EDSM, Inara, Frontier
-// cAPI, ravencolonial client). The GUI calls this from its settings
-// panel.
+// ApplyConfig persists a new config and hot-updates every destination that
+// supports runtime reconfiguration (EDDN, EDSM, Inara, edcolonize, Frontier
+// cAPI, ravencolonial client).
+//
+// This is the ONE place settings are applied — the Fyne settings panel and
+// the browser's POST /api/config both route through here. They used to be
+// near-identical copies, which is exactly how the edcolonize destination
+// ended up hot-updated in one path and silently dropped from the multiplex
+// in the other. Add new destinations here and both surfaces get them.
 func (s *Server) ApplyConfig(newCfg config.Config) error {
 	if newCfg.APIBaseURL == "" {
 		newCfg.APIBaseURL = ravencolonial.DefaultBaseURL
@@ -168,8 +173,38 @@ func (s *Server) ApplyConfig(newCfg config.Config) error {
 		s.inara.SetAPIKey(newCfg.InaraAPIKey)
 		s.inara.SetEnabled(newCfg.InaraEnabled)
 	}
+	if s.edcolonize != nil {
+		s.edcolonize.SetConfig(edcolonize.Config{
+			Enabled: newCfg.EdcolonizeEnabled,
+			URL:     newCfg.EdcolonizeURL,
+			Token:   newCfg.EdcolonizeToken,
+		})
+	}
+	// EVERY destination must be listed: Replace swaps the whole set, so
+	// anything omitted here is silently unhooked until restart.
+	//
+	// Order matters — s.rep populates the session that s.edcolonize reads, so
+	// it must come first and edcolonize last. Nils are skipped rather than
+	// passed through: a typed-nil *Uploader satisfies the Destination
+	// interface and gets past Multiplex's nil check, then panics on dispatch.
 	if s.mux != nil {
-		s.mux.Replace(s.rep, s.eddn, s.edsm, s.inara)
+		dests := make([]destinations.Destination, 0, 5)
+		if s.rep != nil {
+			dests = append(dests, s.rep)
+		}
+		if s.eddn != nil {
+			dests = append(dests, s.eddn)
+		}
+		if s.edsm != nil {
+			dests = append(dests, s.edsm)
+		}
+		if s.inara != nil {
+			dests = append(dests, s.inara)
+		}
+		if s.edcolonize != nil {
+			dests = append(dests, s.edcolonize)
+		}
+		s.mux.Replace(dests...)
 	}
 	s.mu.Unlock()
 	s.hub.Publish(reporter.Status{
