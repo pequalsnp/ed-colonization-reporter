@@ -103,11 +103,18 @@ func TestMultiplex_DisabledIsNotAnError(t *testing.T) {
 	if err := m.HandleEvent(context.Background(), sampleRaw(t, "FSDJump")); err != nil {
 		t.Fatal(err)
 	}
-	// The current Multiplex impl forwards ErrDisabled via OnError; in
-	// practice the bridging code in web/server.go suppresses these. This
-	// test pins the current behaviour so changes here are deliberate.
-	if onErrCalls != 1 {
-		t.Errorf("disabled dest should pass through OnError once; got %d", onErrCalls)
+	// Multiplex now swallows ErrDisabled, which is what ErrDisabled's own doc
+	// comment has always promised: "it does not invoke OnError for
+	// ErrDisabled, since the user explicitly asked for silence."
+	//
+	// Previously the impl forwarded it and web/server.go's bridge happened to
+	// discard everything, so the mismatch was invisible. It still meant every
+	// event fanned out one OnError call per switched-off destination — on a
+	// default install, with all community uploads off, that is every event
+	// times every destination — and any future consumer of OnError would have
+	// had to re-implement the filter itself.
+	if onErrCalls != 0 {
+		t.Errorf("a disabled destination must not reach OnError; got %d calls", onErrCalls)
 	}
 	if b.called != 1 {
 		t.Errorf("subsequent destinations must still be called when one returns ErrDisabled; b.called=%d", b.called)

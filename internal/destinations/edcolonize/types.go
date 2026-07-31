@@ -1,12 +1,24 @@
-// Package edcolonize reports commander state INWARD, to Kyle's self-hosted
-// edcolonize instance, so an AI companion can ground its advice in what is
-// actually true of the game right now.
+// Package edcolonize is an OPTIONAL integration with a self-hosted
+// [edcolonize] instance — a colonization-candidate tool that also exposes an
+// MCP server, so an AI assistant can query it. This destination feeds that
+// instance the player's live commander state, letting the assistant ground
+// its advice in what is actually true of the game right now instead of
+// asking the player to recite it.
 //
 // Every other destination in this repo reports OUTWARD to a community
 // service (ravencolonial, EDDN, EDSM, Inara) and is about contributing data.
-// This one is about the player's own private state: where they are, what
-// they're flying, what they're carrying, what a construction site still
-// wants. It is off by default and points at a LAN address.
+// This one reports INWARD, to a server the player runs themselves: where
+// they are, what they're flying, what they're carrying, what a construction
+// site still wants. That data never leaves their machine.
+//
+// # Entirely optional
+//
+// The reporter does not need edcolonize to function, and most users will
+// never run one. This destination is disabled unless the user explicitly
+// configures a URL: with no configuration, New returns an Uploader whose
+// HandleEvent immediately returns [destinations.ErrDisabled] and which opens
+// no sockets and starts no goroutines. Nothing else in the reporter reads
+// from it or depends on it.
 //
 // # Wire contract
 //
@@ -17,6 +29,8 @@
 // rejects an unknown schema version with 400 rather than storing a
 // half-understood snapshot. types_test.go pins the tags against accidental
 // renames.
+//
+// [edcolonize]: https://github.com/pequalsnp/edcolonize
 package edcolonize
 
 import "time"
