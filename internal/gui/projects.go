@@ -244,7 +244,6 @@ func (p *projectsPanel) rerender() {
 			p.empty.Hide()
 		}
 		for _, r := range filtered {
-			r := r
 			isExpanded := p.expanded[r.BuildID]
 			p.cards.Add(p.buildProjectCard(r, isExpanded))
 		}
@@ -643,13 +642,6 @@ func commodityRow(c commodityEntry, fcInventory, shipInventory, marketStock map[
 	return container.NewHBox(need, fcCell, shipCell, diffCell, name)
 }
 
-func absInt(n int) int {
-	if n < 0 {
-		return -n
-	}
-	return n
-}
-
 // countOutstanding returns how many commodities have outstanding > 0.
 func countOutstanding(m map[string]int) int {
 	n := 0
@@ -740,10 +732,7 @@ func computeProgress(p ravencolonial.Project, outstanding int) float64 {
 		return 1.0
 	}
 	if p.MaxNeed > 0 {
-		delivered := p.MaxNeed - outstanding
-		if delivered < 0 {
-			delivered = 0
-		}
+		delivered := max(p.MaxNeed-outstanding, 0)
 		return float64(delivered) / float64(p.MaxNeed)
 	}
 	return 0

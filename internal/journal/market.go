@@ -23,20 +23,20 @@ type MarketFile struct {
 
 // MarketItem is one commodity entry.
 type MarketItem struct {
-	ID             int64  `json:"id"`
-	Name           string `json:"Name"`
-	NameLocalised  string `json:"Name_Localised"`
-	Category       string `json:"Category"`
-	BuyPrice       int    `json:"BuyPrice"`
-	SellPrice      int    `json:"SellPrice"`
-	MeanPrice      int    `json:"MeanPrice"`
-	StockBracket   int    `json:"StockBracket"`
-	DemandBracket  int    `json:"DemandBracket"`
-	Stock          int    `json:"Stock"`
-	Demand         int    `json:"Demand"`
-	Consumer       bool   `json:"Consumer"`
-	Producer       bool   `json:"Producer"`
-	Rare           bool   `json:"Rare"`
+	ID            int64  `json:"id"`
+	Name          string `json:"Name"`
+	NameLocalised string `json:"Name_Localised"`
+	Category      string `json:"Category"`
+	BuyPrice      int    `json:"BuyPrice"`
+	SellPrice     int    `json:"SellPrice"`
+	MeanPrice     int    `json:"MeanPrice"`
+	StockBracket  int    `json:"StockBracket"`
+	DemandBracket int    `json:"DemandBracket"`
+	Stock         int    `json:"Stock"`
+	Demand        int    `json:"Demand"`
+	Consumer      bool   `json:"Consumer"`
+	Producer      bool   `json:"Producer"`
+	Rare          bool   `json:"Rare"`
 }
 
 // ReadMarketFile parses Market.json from the journal directory.

@@ -42,16 +42,16 @@ func checkForUpdate(ctx context.Context, currentVersion string) (*updateInfo, er
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
 		return nil, fmt.Errorf("update check: HTTP %d: %s", resp.StatusCode, body)
 	}
 	var releases []struct {
-		TagName    string `json:"tag_name"`
-		HTMLURL    string `json:"html_url"`
-		Name       string `json:"name"`
-		Draft      bool   `json:"draft"`
+		TagName string `json:"tag_name"`
+		HTMLURL string `json:"html_url"`
+		Name    string `json:"name"`
+		Draft   bool   `json:"draft"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&releases); err != nil {
 		return nil, err

@@ -107,7 +107,7 @@ func containsLocalised(b []byte) bool {
 func bytesContains(b, sub []byte) bool {
 	for i := 0; i+len(sub) <= len(b); i++ {
 		match := true
-		for j := 0; j < len(sub); j++ {
+		for j := range sub {
 			if b[i+j] != sub[j] {
 				match = false
 				break

@@ -97,7 +97,7 @@ func (l *activityFileLogger) maybeRotate() {
 	if err != nil {
 		return
 	}
-	defer src.Close()
+	defer func() { _ = src.Close() }()
 	if _, err := src.Seek(-keep, io.SeekEnd); err != nil {
 		return
 	}
@@ -130,7 +130,7 @@ func (l *activityFileLogger) close() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.f != nil {
-		l.f.Close()
+		_ = l.f.Close()
 		l.f = nil
 	}
 }

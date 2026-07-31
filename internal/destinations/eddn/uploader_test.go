@@ -50,7 +50,7 @@ func uploaderWithMock(t *testing.T, sess *state.Session, captured *[]map[string]
 			http.Error(w, "bad gzip", 400)
 			return
 		}
-		defer gz.Close()
+		defer func() { _ = gz.Close() }()
 		body, _ := io.ReadAll(gz)
 		var env map[string]any
 		if err := json.Unmarshal(body, &env); err != nil {
@@ -110,9 +110,9 @@ func TestUploader_FSDJumpUploadsEnvelope(t *testing.T) {
 		"StarSystem":     "Sol",
 		"StarPos":        []any{0.0, 0.0, 0.0},
 		"SystemAddress":  10477373803,
-		"FuelLevel":      32.0, // forbidden — must be stripped
-		"FuelUsed":       8.0,  // forbidden
-		"JumpDist":       14.3, // forbidden
+		"FuelLevel":      32.0,  // forbidden — must be stripped
+		"FuelUsed":       8.0,   // forbidden
+		"JumpDist":       14.3,  // forbidden
 		"Name_Localised": "Sol", // forbidden by pattern
 	})
 

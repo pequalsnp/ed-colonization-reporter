@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"image/color"
+	"maps"
 	"strings"
 	"sync"
 	"time"
@@ -211,9 +212,7 @@ func (b *destBar) update() {
 	// Per-destination health from the statusHub classifier.
 	b.healthMu.Lock()
 	health := make(map[string]destHealth, len(b.health))
-	for k, v := range b.health {
-		health[k] = v
-	}
+	maps.Copy(health, b.health)
 	b.healthMu.Unlock()
 
 	fyne.Do(func() {

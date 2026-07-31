@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 	"sync"
 	"time"
@@ -497,9 +498,7 @@ func (r *Reporter) handleCargoTransfer(ctx context.Context, e journal.CargoTrans
 // keeps state from depending on ravencolonial.
 func mapStringInt(c ravencolonial.Cargo) map[string]int {
 	out := make(map[string]int, len(c))
-	for k, v := range c {
-		out[k] = v
-	}
+	maps.Copy(out, c)
 	return out
 }
 
@@ -909,10 +908,7 @@ func commoditiesFromDepot(e journal.ColonisationConstructionDepotEvent) (map[str
 	out := make(map[string]int, len(e.ResourcesRequired))
 	total := 0
 	for _, r := range e.ResourcesRequired {
-		need := r.RequiredAmount - r.ProvidedAmount
-		if need < 0 {
-			need = 0
-		}
+		need := max(r.RequiredAmount-r.ProvidedAmount, 0)
 		key := NormalizeCommodity(r.Name)
 		if key == "" {
 			key = NormalizeCommodity(r.NameLocalised)

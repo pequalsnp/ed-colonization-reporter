@@ -36,11 +36,11 @@ func mustRaw(t *testing.T, event string, payload map[string]any) journal.Raw {
 }
 
 type capture struct {
-	bodies    []url.Values
-	messages  [][]map[string]any
-	reqCount  atomic.Int32
-	respCode  int
-	respBody  string
+	bodies     []url.Values
+	messages   [][]map[string]any
+	reqCount   atomic.Int32
+	respCode   int
+	respBody   string
 	respHeader http.Header
 }
 
@@ -288,7 +288,7 @@ func TestDiscardSet_RefreshFiltersDocked(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	var names []string
 	_ = json.NewDecoder(resp.Body).Decode(&names)
 	set := map[string]bool{}

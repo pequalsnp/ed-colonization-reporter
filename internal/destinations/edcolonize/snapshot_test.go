@@ -3,6 +3,7 @@ package edcolonize
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"testing"
 	"time"
 
@@ -31,9 +32,7 @@ func buildAfter(t *testing.T, sess *state.Session, events ...func(*testing.T) ma
 func ev(event string, fields map[string]any) func(*testing.T) map[string]any {
 	return func(*testing.T) map[string]any {
 		out := map[string]any{"__event": event}
-		for k, v := range fields {
-			out[k] = v
-		}
+		maps.Copy(out, fields)
 		return out
 	}
 }

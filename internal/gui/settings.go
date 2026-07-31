@@ -140,8 +140,8 @@ func (p *settingsPanel) updateJournalStatus() {
 		txt   string
 		color = edFgMuted
 	)
-	switch {
-	case dir == "":
+	switch dir {
+	case "":
 		txt = "✗ no directory configured or auto-detected"
 		color = edStatusError
 	default:
@@ -256,7 +256,7 @@ func (p *settingsPanel) testEDSM() {
 		})
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	var reply struct {
 		MsgNum int    `json:"msgnum"`
@@ -331,7 +331,7 @@ func (p *settingsPanel) testInara() {
 		})
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	var reply struct {
 		Header struct {
@@ -369,7 +369,7 @@ func (p *settingsPanel) reportTest(label *canvas.Text, resp *http.Response, err 
 			label.Text = "✗ " + err.Error()
 			label.Color = edStatusError
 		} else {
-			defer resp.Body.Close()
+			defer func() { _ = resp.Body.Close() }()
 			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 				label.Text = "✓ " + okMsg
 				label.Color = edStatusOK
@@ -418,7 +418,7 @@ func (p *settingsPanel) testRavencolonial() {
 			p.rcTestStatus.Text = "✗ " + err.Error()
 			p.rcTestStatus.Color = edStatusError
 		} else {
-			defer resp.Body.Close()
+			defer func() { _ = resp.Body.Close() }()
 			if resp.StatusCode == http.StatusOK {
 				p.rcTestStatus.Text = fmt.Sprintf("✓ %s reachable (HTTP 200)", base)
 				p.rcTestStatus.Color = edStatusOK

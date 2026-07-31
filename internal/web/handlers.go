@@ -71,9 +71,9 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 // configDTO is the JSON shape exchanged with the browser. It uses snake_case
 // to match the TOML field names so the form is self-documenting.
 type configDTO struct {
-	JournalDir          string `json:"journal_dir"`
-	APIBaseURL          string `json:"api_base_url"`
-	APIKey              string `json:"api_key"`
+	JournalDir        string `json:"journal_dir"`
+	APIBaseURL        string `json:"api_base_url"`
+	APIKey            string `json:"api_key"`
 	CommanderOverride string `json:"commander_override"`
 	ReplaySession     bool   `json:"replay_session"`
 	EDDNEnabled       bool   `json:"eddn_enabled"`
@@ -225,4 +225,3 @@ func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(v)
 }
-

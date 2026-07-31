@@ -8,7 +8,7 @@ on:
 
 jobs:
   test:
-    name: vet + test + build (linux/amd64)
+    name: lint + test + build (linux/amd64)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -26,8 +26,19 @@ jobs:
         with:
           go-version: '1.26'
 
-      - name: go vet
-        run: go vet ./...
+      # golangci-lint covers govet, so there's no separate vet step. It also
+      # runs `modernize`, which is what stops the tree drifting back to older
+      # idioms as Go moves on. Needs the Fyne deps installed above, since it
+      # type-checks the cgo-backed GUI packages like any other build.
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.12.2
+
+      # gofmt is enforced via the config's formatters section; `fmt --diff`
+      # fails the job and prints exactly what to apply.
+      - name: gofmt check
+        run: golangci-lint fmt --diff ./...
 
       - name: go test (race)
         run: go test -race -count=1 -timeout 5m ./...

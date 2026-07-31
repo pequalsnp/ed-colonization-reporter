@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"net"
 	"net/http"
 	"sync"
@@ -41,9 +42,8 @@ type Server struct {
 	// returns. Production uses openBrowser; tests pass a no-op.
 	OpenBrowser func(url string)
 
-	mu      sync.Mutex
-	cfg     config.Config
-	cfgPath string
+	mu  sync.Mutex
+	cfg config.Config
 
 	session *state.Session
 	client  *ravencolonial.Client
@@ -287,9 +287,7 @@ func (s *Server) LastFCInventory() (name string, cargo ravencolonial.Cargo, at t
 		return "", nil, time.Time{}
 	}
 	out := make(ravencolonial.Cargo, len(c))
-	for k, v := range c {
-		out[k] = v
-	}
+	maps.Copy(out, c)
 	return n, out, t
 }
 
@@ -309,7 +307,7 @@ func (s *Server) Start(ctx context.Context) error {
 	s.mu.Unlock()
 
 	if err := s.initSessionAndReporter(); err != nil {
-		ln.Close()
+		_ = ln.Close()
 		return err
 	}
 

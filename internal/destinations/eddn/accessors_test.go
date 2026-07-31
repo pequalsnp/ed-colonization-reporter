@@ -26,10 +26,10 @@ func TestUploader_AccessorsRoundtrip(t *testing.T) {
 
 func TestShortSchema(t *testing.T) {
 	cases := map[string]string{
-		"https://eddn.edcd.io/schemas/journal/1":       "journal/1",
+		"https://eddn.edcd.io/schemas/journal/1":        "journal/1",
 		"https://eddn.edcd.io/schemas/commodity/3/test": "commodity/3/test",
-		"https://elsewhere.example/foo":                "https://elsewhere.example/foo",
-		"":                                             "",
+		"https://elsewhere.example/foo":                 "https://elsewhere.example/foo",
+		"":                                              "",
 	}
 	for in, want := range cases {
 		if got := shortSchema(in); got != want {

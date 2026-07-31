@@ -14,7 +14,7 @@ func TestStatusHub_MultipleSubscribersAllReceive(t *testing.T) {
 	const subscribers = 5
 	chs := make([]<-chan reporter.Status, subscribers)
 	cancels := make([]func(), subscribers)
-	for i := 0; i < subscribers; i++ {
+	for i := range subscribers {
 		chs[i], cancels[i] = hub.Subscribe()
 	}
 	defer func() {
@@ -28,7 +28,6 @@ func TestStatusHub_MultipleSubscribersAllReceive(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(subscribers)
 	for i, ch := range chs {
-		i, ch := i, ch
 		go func() {
 			defer wg.Done()
 			select {
@@ -77,7 +76,7 @@ func TestStatusHub_CancelStopsReceiving(t *testing.T) {
 
 func TestStatusHub_BufferCapped(t *testing.T) {
 	hub := newStatusHub()
-	for i := 0; i < 1000; i++ {
+	for range 1000 {
 		hub.Publish(reporter.Status{Message: "x"})
 	}
 	hub.mu.Lock()

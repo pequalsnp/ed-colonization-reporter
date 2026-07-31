@@ -11,9 +11,9 @@ func TestStripLocalised_RemovesAtEveryDepth(t *testing.T) {
 		"Name_Localised": "Titanium",
 		"Factions": []any{
 			map[string]any{
-				"Name":           "Sol Workers Party",
-				"Name_Localised": "Sol Workers Party (translated)",
-				"Government":     "$government_democracy;",
+				"Name":                 "Sol Workers Party",
+				"Name_Localised":       "Sol Workers Party (translated)",
+				"Government":           "$government_democracy;",
 				"Government_Localised": "Democracy",
 			},
 		},
@@ -65,12 +65,12 @@ func TestStripJournalForbidden_FactionLevel(t *testing.T) {
 		"StarSystem": "Sol",
 		"Factions": []any{
 			map[string]any{
-				"Name":             "Faction A",
-				"HappiestSystem":   "Foo",
-				"HomeSystem":       "Bar",
-				"MyReputation":     50.0,
-				"SquadronFaction":  true,
-				"FactionState":     "Boom",
+				"Name":            "Faction A",
+				"HappiestSystem":  "Foo",
+				"HomeSystem":      "Bar",
+				"MyReputation":    50.0,
+				"SquadronFaction": true,
+				"FactionState":    "Boom",
 			},
 		},
 	}

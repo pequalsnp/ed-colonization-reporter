@@ -53,23 +53,23 @@ func TestWireTagsMatchReceiver(t *testing.T) {
 	}
 
 	types := map[string]reflect.Type{
-		"Snapshot":      reflect.TypeOf(Snapshot{}),
-		"Location":      reflect.TypeOf(Location{}),
-		"Ship":          reflect.TypeOf(Ship{}),
-		"Module":        reflect.TypeOf(Module{}),
-		"CargoItem":     reflect.TypeOf(CargoItem{}),
-		"Materials":     reflect.TypeOf(Materials{}),
-		"MaterialItem":  reflect.TypeOf(MaterialItem{}),
-		"DepotResource": reflect.TypeOf(DepotResource{}),
-		"Mission":       reflect.TypeOf(Mission{}),
-		"Depot":         reflect.TypeOf(Depot{}),
-		"Ranks":         reflect.TypeOf(Ranks{}),
+		"Snapshot":      reflect.TypeFor[Snapshot](),
+		"Location":      reflect.TypeFor[Location](),
+		"Ship":          reflect.TypeFor[Ship](),
+		"Module":        reflect.TypeFor[Module](),
+		"CargoItem":     reflect.TypeFor[CargoItem](),
+		"Materials":     reflect.TypeFor[Materials](),
+		"MaterialItem":  reflect.TypeFor[MaterialItem](),
+		"DepotResource": reflect.TypeFor[DepotResource](),
+		"Mission":       reflect.TypeFor[Mission](),
+		"Depot":         reflect.TypeFor[Depot](),
+		"Ranks":         reflect.TypeFor[Ranks](),
 	}
 
 	for name, typ := range types {
 		got := make([]string, 0, typ.NumField())
-		for i := range typ.NumField() {
-			tag := typ.Field(i).Tag.Get("json")
+		for field := range typ.Fields() {
+			tag := field.Tag.Get("json")
 			if tag == "" || tag == "-" {
 				continue
 			}

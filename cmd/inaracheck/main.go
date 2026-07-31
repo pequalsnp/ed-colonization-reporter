@@ -112,7 +112,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("POST: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	fmt.Println("HTTP", resp.Status)
 	fmt.Println()
@@ -176,13 +176,13 @@ func lastTravelContext(dirOverride string) (cmdr, fid, system string, pos []floa
 	if err != nil {
 		return "", "", "", nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	data, err := io.ReadAll(f)
 	if err != nil {
 		return "", "", "", nil, err
 	}
-	lines := strings.Split(string(data), "\n")
-	for _, line := range lines {
+	lines := strings.SplitSeq(string(data), "\n")
+	for line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue

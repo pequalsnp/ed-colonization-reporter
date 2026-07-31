@@ -364,10 +364,7 @@ func (u *Uploader) markDirty() {
 	if u.timer != nil {
 		return // a flush is already scheduled
 	}
-	wait := time.Until(u.lastPush.Add(u.cfg.MinInterval))
-	if wait < 0 {
-		wait = 0
-	}
+	wait := max(time.Until(u.lastPush.Add(u.cfg.MinInterval)), 0)
 	u.timer = time.AfterFunc(wait, u.flush)
 }
 

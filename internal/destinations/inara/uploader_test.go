@@ -243,8 +243,7 @@ func TestUploader_BackgroundFlush(t *testing.T) {
 	c := &serverCapture{}
 	u := setupEnabled(t, sess, c)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	u.StartBackground(ctx, 50*time.Millisecond)
 
 	r := raw(t, journal.EventFSDJump, map[string]any{
@@ -397,7 +396,7 @@ func TestUploader_BatchSplitWhenOverMax(t *testing.T) {
 
 	// Cram >MaxEventsPerBatch events in by repeating FSDJumps.
 	// Each FSDJump enqueues 2 events; do MaxEventsPerBatch+1 jumps -> queue ~ 2*(N+1).
-	for i := 0; i < MaxEventsPerBatch+1; i++ {
+	for range MaxEventsPerBatch + 1 {
 		_ = u.HandleEvent(context.Background(), raw(t, journal.EventFSDJump, map[string]any{
 			"StarSystem": "Sol", "StarPos": []any{0, 0, 0},
 		}))
@@ -429,7 +428,7 @@ func TestUploader_QueueCappedAtMax(t *testing.T) {
 
 	// Each FSDJump enqueues 2 events; pump enough to overflow.
 	pumps := (MaxQueueEvents / 2) + 50
-	for i := 0; i < pumps; i++ {
+	for range pumps {
 		_ = u.HandleEvent(context.Background(), raw(t, journal.EventFSDJump, map[string]any{
 			"StarSystem": "Sol", "StarPos": []any{0, 0, 0},
 		}))

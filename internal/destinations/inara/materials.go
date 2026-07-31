@@ -148,10 +148,7 @@ func addMaterial(m map[string]int, name string, delta int) bool {
 		return false
 	}
 	old := m[name]
-	n := old + delta
-	if n < 0 {
-		n = 0
-	}
+	n := max(old+delta, 0)
 	if n == old {
 		return false
 	}

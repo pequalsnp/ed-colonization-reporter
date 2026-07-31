@@ -187,7 +187,7 @@ func (u *Uploader) post(ctx context.Context, cmdr, key string, events []map[stri
 		u.status("ERROR", "EDSM upload failed: "+err.Error())
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Update rate-limit window if the server told us.
 	if remaining, _ := strconv.Atoi(resp.Header.Get("X-Rate-Limit-Remaining")); remaining == 0 {
@@ -210,15 +210,15 @@ func (u *Uploader) post(ctx context.Context, cmdr, key string, events []map[stri
 		u.status("WARN", "EDSM: cannot decode reply: "+err.Error())
 		return nil // not fatal — the upload may still have landed
 	}
-	switch {
-	case reply.MsgNum/100 == 1:
+	switch reply.MsgNum / 100 {
+	case 1:
 		u.status("OK", fmt.Sprintf("EDSM: %d event accepted", len(events)))
-	case reply.MsgNum/100 == 5:
+	case 5:
 		// "Server saved for later" — count as success.
 		u.status("INFO", fmt.Sprintf("EDSM: deferred (msg %d): %s", reply.MsgNum, reply.Msg))
-	case reply.MsgNum/100 == 2:
+	case 2:
 		u.status("ERROR", fmt.Sprintf("EDSM rejected upload (msg %d): %s", reply.MsgNum, reply.Msg))
-	case reply.MsgNum/100 == 4:
+	case 4:
 		u.status("WARN", fmt.Sprintf("EDSM ignored event (msg %d): %s", reply.MsgNum, reply.Msg))
 	default:
 		u.status("INFO", fmt.Sprintf("EDSM msg %d: %s", reply.MsgNum, reply.Msg))
