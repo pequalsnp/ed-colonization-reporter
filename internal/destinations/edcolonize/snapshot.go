@@ -108,9 +108,32 @@ func (u *Uploader) buildLocked() *Snapshot {
 	}
 
 	// ── sections only this package tracks ───────────────────────────────
-	snap.Credits = u.tracked.credits
-	snap.Ranks = u.tracked.ranks
-	snap.Materials = u.tracked.materials
+	//
+	// These are COPIED, not aliased. post() marshals the finished snapshot on
+	// the flush goroutine after u.mu has been released, while HandleEvent may
+	// still be folding new events into tracked state — so handing out a live
+	// pointer is a data race, not merely an aliasing smell.
+	//
+	// Ranks is the one that actually bites: the Rank and Progress handlers
+	// mutate the pointed-to struct FIELD BY FIELD (r.Combat, r.Trade, …)
+	// rather than replacing it, so a rank-up landing mid-marshal races. The
+	// others are pointer-swapped wholesale today and would be safe aliased,
+	// but they're copied too so this doesn't depend on that staying true.
+	if u.tracked.credits != nil {
+		credits := *u.tracked.credits
+		snap.Credits = &credits
+	}
+	if u.tracked.ranks != nil {
+		ranks := *u.tracked.ranks
+		snap.Ranks = &ranks
+	}
+	if u.tracked.materials != nil {
+		// Shallow copy: the slices inside are rebuilt from scratch by
+		// toMaterialItems on every Materials event and never mutated in
+		// place, so they are safe to share.
+		materials := *u.tracked.materials
+		snap.Materials = &materials
+	}
 
 	if len(u.tracked.missions) > 0 {
 		snap.Missions = make([]Mission, 0, len(u.tracked.missions))
