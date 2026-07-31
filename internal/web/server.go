@@ -19,6 +19,7 @@ import (
 
 	"github.com/pequalsnp/ed-colonization-reporter/internal/config"
 	"github.com/pequalsnp/ed-colonization-reporter/internal/destinations"
+	"github.com/pequalsnp/ed-colonization-reporter/internal/destinations/edcolonize"
 	"github.com/pequalsnp/ed-colonization-reporter/internal/destinations/eddn"
 	"github.com/pequalsnp/ed-colonization-reporter/internal/destinations/edsm"
 	"github.com/pequalsnp/ed-colonization-reporter/internal/destinations/inara"
@@ -50,7 +51,9 @@ type Server struct {
 	eddn    *eddn.Uploader
 	edsm    *edsm.Uploader
 	inara   *inara.Uploader
-	mux     *destinations.Multiplex
+	// edcolonize is the inward push target — see buildDestinations.
+	edcolonize *edcolonize.Uploader
+	mux        *destinations.Multiplex
 
 	// lastEventAt is the wall-clock time (unix nanos) of the most
 	// recent journal event the tailer handed to the multiplex.
@@ -402,7 +405,23 @@ func (s *Server) initSessionAndReporter() error {
 	s.inara.SetAPIKey(s.cfg.InaraAPIKey)
 	s.inara.SetEnabled(s.cfg.InaraEnabled)
 
-	s.mux = destinations.NewMultiplex(s.rep, s.eddn, s.edsm, s.inara)
+	// edcolonize pushes commander state INWARD to Kyle's self-hosted box so
+	// an AI companion can ground advice in live game state. Registered LAST
+	// on purpose: the multiplex dispatches in order and s.rep is what
+	// populates s.session, so anywhere earlier would snapshot the previous
+	// event's state.
+	s.edcolonize = edcolonize.New(
+		edcolonize.SoftwareID{Name: "edcolreport", Version: s.Version},
+		edcolonize.Config{
+			Enabled: s.cfg.EdcolonizeEnabled,
+			URL:     s.cfg.EdcolonizeURL,
+			Token:   s.cfg.EdcolonizeToken,
+		},
+		s.session,
+	)
+	s.edcolonize.OnError = func(err error) { statusBridge("warn", err.Error()) }
+
+	s.mux = destinations.NewMultiplex(s.rep, s.eddn, s.edsm, s.inara, s.edcolonize)
 	s.mux.OnError = func(name string, err error) {
 		// Don't surface per-event errors here — destinations emit their own
 		// user-visible status messages. This callback exists for diagnostics
