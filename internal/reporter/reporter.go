@@ -187,11 +187,12 @@ func (r *Reporter) HandleEvent(ctx context.Context, raw journal.Raw) error {
 			r.Session.SetSystem(e.StarSystem, e.SystemAddress)
 		}
 		r.Session.SetDocked(e.StationName, e.MarketID, e.SystemAddress)
-		// Note: previously we POSTed a sparse PatchProject here to
-		// refresh faction/body, but ravencolonial returned 400 — it
-		// likely requires the full ProjectUpdate body shape. Backed
-		// out until the contract is understood; depot events that
-		// arrive shortly after dock already carry the data we need.
+		// Docking at a build site we already track is the only place
+		// faction/body reach us — depot events carry neither. Safe on
+		// replay: patching the same values is idempotent server-side.
+		if buildID, ok := r.Session.BuildFor(e.MarketID); ok {
+			r.refreshProjectMetadata(ctx, buildID, e)
+		}
 	case journal.EventUndocked:
 		r.Session.SetUndocked()
 		// Clear the "buyable at current market" highlight when leaving
@@ -345,10 +346,14 @@ func (r *Reporter) fetchLinkedCarriers(ctx context.Context, cmdr string) {
 	}
 }
 
-// refreshProjectMetadata posts a sparse update with faction/body data
-// to a known project. SrvSurvey does this on every Docked event so the
-// website's project record stays accurate when the cmdr settles the
-// station's faction or the build is relocated to a different body.
+// refreshProjectMetadata sends a sparse update with faction/body data to a
+// known project. SrvSurvey does this on every Docked event so the website's
+// project record stays accurate when the cmdr settles the station's faction
+// or the build is relocated to a different body.
+//
+// Best-effort by design: a failure is logged and swallowed rather than
+// returned, so a ravencolonial hiccup can't stop us recording the dock or
+// reporting the depot snapshot that usually follows it.
 func (r *Reporter) refreshProjectMetadata(ctx context.Context, buildID string, e journal.DockedEvent) {
 	patch := ravencolonial.ProjectPatch{
 		FactionName: e.StationFaction.Name,

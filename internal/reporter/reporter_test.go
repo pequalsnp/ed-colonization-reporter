@@ -360,14 +360,10 @@ func TestHandleCommander_FetchesEvenOnReplay(t *testing.T) {
 	}
 }
 
-func TestHandleDocked_DoesNotPatchProjectMetadata(t *testing.T) {
-	// Previously: docking at a tracked project triggered a sparse
-	// PatchProject. Ravencolonial returned 400 on the sparse body so
-	// we've rolled that behaviour back; this test pins the new
-	// expectation (no PatchProject on dock).
+func TestHandleDocked_RefreshesProjectMetadata(t *testing.T) {
 	sess := state.New()
 	sess.SetCommander("Jameson", "F1")
-	sess.RememberBuild(128666761, "build-belshaw")
+	sess.RememberBuild(128666761, "build-belshaw") // already tracking this build
 	api := &fakeAPI{}
 	r := New(api, sess)
 	body := 3
@@ -382,8 +378,64 @@ func TestHandleDocked_DoesNotPatchProjectMetadata(t *testing.T) {
 	if err := r.HandleEvent(context.Background(), raw); err != nil {
 		t.Fatalf("HandleEvent: %v", err)
 	}
+	if len(api.projectPatches) != 1 {
+		t.Fatalf("project patches = %d, want 1", len(api.projectPatches))
+	}
+	p := api.projectPatches[0]
+	if p.BuildID != "build-belshaw" {
+		t.Errorf("BuildID = %q", p.BuildID)
+	}
+	if p.Patch.FactionName != "Synuefe CN-H d11-83 Independents" {
+		t.Errorf("FactionName = %q", p.Patch.FactionName)
+	}
+	if p.Patch.BodyName != "Synuefe CN-H d11-83 1" {
+		t.Errorf("BodyName = %q", p.Patch.BodyName)
+	}
+	if p.Patch.BodyNum == nil || *p.Patch.BodyNum != 3 {
+		t.Errorf("BodyNum = %v, want pointer-to-3", p.Patch.BodyNum)
+	}
+}
+
+func TestHandleDocked_NoPatchForUntrackedBuild(t *testing.T) {
+	sess := state.New()
+	sess.SetCommander("Jameson", "F1")
+	// No RememberBuild — this dock is unrelated to any tracked project.
+	api := &fakeAPI{}
+	r := New(api, sess)
+	raw := mustRaw(t, journal.EventDocked, map[string]any{
+		"MarketID":       128666761,
+		"StarSystem":     "Sol",
+		"StationName":    "Abraham Lincoln",
+		"StationFaction": map[string]any{"Name": "Mother Gaia"},
+	})
+	if err := r.HandleEvent(context.Background(), raw); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
 	if len(api.projectPatches) != 0 {
-		t.Errorf("Docked should no longer call PatchProject; got %v", api.projectPatches)
+		t.Errorf("untracked dock must not patch; got %v", api.projectPatches)
+	}
+}
+
+func TestHandleDocked_PatchFailureDoesNotFailEvent(t *testing.T) {
+	// A ravencolonial failure here is cosmetic — the dock must still be
+	// recorded so the depot snapshot that usually follows can be reported.
+	sess := state.New()
+	sess.SetCommander("Jameson", "F1")
+	sess.RememberBuild(128666761, "build-belshaw")
+	api := &fakeAPI{projectPatchErr: errors.New("boom")}
+	r := New(api, sess)
+	raw := mustRaw(t, journal.EventDocked, map[string]any{
+		"MarketID":       128666761,
+		"StarSystem":     "Synuefe CN-H d11-83",
+		"StationName":    "Belshaw Berth",
+		"StationFaction": map[string]any{"Name": "Synuefe CN-H d11-83 Independents"},
+	})
+	if err := r.HandleEvent(context.Background(), raw); err != nil {
+		t.Fatalf("patch failure must not fail the event: %v", err)
+	}
+	docked, station, marketID := sess.Dock()
+	if !docked || station != "Belshaw Berth" || marketID != 128666761 {
+		t.Errorf("dock not recorded: docked=%v station=%q market=%d", docked, station, marketID)
 	}
 }
 
@@ -763,6 +815,7 @@ type fakeAPI struct {
 	fcPutErr           error
 	fcCargoErr         error
 	architectErr       error
+	projectPatchErr    error
 	linkedCarriersErr  error
 	getFCResp          *ravencolonial.FleetCarrier
 	getFCErr           error
@@ -865,7 +918,7 @@ func (f *fakeAPI) SetSystemArchitect(_ context.Context, systemName, cmdr string)
 
 func (f *fakeAPI) PatchProject(_ context.Context, buildID string, patch ravencolonial.ProjectPatch) error {
 	f.projectPatches = append(f.projectPatches, projectPatchCall{BuildID: buildID, Patch: patch})
-	return nil
+	return f.projectPatchErr
 }
 
 func (f *fakeAPI) CommanderCarriers(_ context.Context, cmdr string) ([]ravencolonial.LinkedCarrier, error) {
