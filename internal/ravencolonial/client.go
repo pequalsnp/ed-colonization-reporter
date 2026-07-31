@@ -260,18 +260,30 @@ func (c *Client) CommanderCarriers(ctx context.Context, cmdr string) ([]LinkedCa
 	return out, nil
 }
 
-// PatchProject applies a sparse update to a project — used for tagging
-// factionName and bodyName/bodyNum once the commander docks at a build
-// site that didn't have those fields populated when it was created.
+// ProjectPatch is a sparse ProjectUpdate — used for tagging factionName and
+// bodyName/bodyNum once the commander docks at a build site that didn't have
+// those fields populated when it was created.
+//
+// BuildID carries no omitempty on purpose. It is the *only* entry in the
+// ProjectUpdate schema's `required` array (every other property is optional
+// and nullable), and the server wants it in the body, not just the path — an
+// earlier version of this struct omitted it entirely, which is what made the
+// call 400.
 type ProjectPatch struct {
-	FactionName string  `json:"factionName,omitempty"`
-	BodyName    string  `json:"bodyName,omitempty"`
-	BodyNum     *int    `json:"bodyNum,omitempty"`
+	BuildID     string `json:"buildId"`
+	FactionName string `json:"factionName,omitempty"`
+	BodyName    string `json:"bodyName,omitempty"`
+	BodyNum     *int   `json:"bodyNum,omitempty"`
 }
 
-// PatchProject POSTs a sparse partial-update to /api/project/{buildId}.
-// SrvSurvey uses the same endpoint for both full updates and these
-// metadata patches (ColonyData.cs:283-327).
+// PatchProject sends a partial update to /api/project/{buildId}.
+//
+// The API defines both POST and PATCH on this path against the same
+// ProjectUpdate schema. We use PATCH: every field but buildId is
+// optional-and-nullable, so a POST of a three-field body risks being read as
+// a full replacement that clears commodities/maxNeed. PATCH is the verb whose
+// merge semantics we actually want. UpdateProject keeps using POST, since it
+// sends a complete snapshot.
 func (c *Client) PatchProject(ctx context.Context, buildID string, patch ProjectPatch) error {
 	if buildID == "" {
 		return errors.New("PatchProject: buildID required")
@@ -279,8 +291,11 @@ func (c *Client) PatchProject(ctx context.Context, buildID string, patch Project
 	if patch.FactionName == "" && patch.BodyName == "" && patch.BodyNum == nil {
 		return nil // nothing to send
 	}
+	// Path and body must agree; take the path argument as authoritative so
+	// callers can't set one without the other.
+	patch.BuildID = buildID
 	path := "/api/project/" + url.PathEscape(buildID)
-	return c.do(ctx, http.MethodPost, path, patch, nil)
+	return c.do(ctx, http.MethodPatch, path, patch, nil)
 }
 
 // PatchCarrierCargo applies a delta to the FC's stored cargo. Positive
