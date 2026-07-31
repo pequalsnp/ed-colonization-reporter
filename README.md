@@ -43,6 +43,28 @@ not yet implemented.
   Requires an API key from [inara.cz/settings-api](https://inara.cz/settings-api/).
   Silently skips beta/legacy galaxies.
 
+**Self-hosted (opt-in, off by default)**
+- **edcolonize** — pushes a compact *commander-state snapshot* to your own
+  [edcolonize](https://github.com/pequalsnp/edcolonize) instance: where you
+  are, what you're flying, credits, cargo, engineering materials, active
+  missions, and the per-commodity state of construction sites you're
+  contributing to. Unlike every other destination this reports **inward**, to
+  your own box rather than a community service, so an AI companion can ground
+  its advice in your actual game state instead of asking you to recite it.
+
+  Snapshots are debounced (at most one POST every few seconds, no matter how
+  busy the journal gets) and **fail open**: if your box is rebooting or
+  unreachable the snapshot is dropped and everything else carries on
+  unaffected. Configure in Settings, or by environment:
+
+  ```
+  EDCOLONIZE_URL=http://<your-box>:3000/api/cmdr/snapshot
+  EDCOLONIZE_TOKEN=<same value as edcolonize's CMDR_INGEST_TOKEN>
+  ```
+
+  Setting `EDCOLONIZE_URL` enables the destination on its own; environment
+  values override the config file.
+
 **Convenience**
 - Optional **backfill** replays the current journal file from the start
   on launch so a mid-session restart re-reports anything the running
@@ -130,8 +152,15 @@ The CI workflow runs the same on every push.
 - `internal/ravencolonial` — HTTP client for the ravencolonial.com API.
 - `internal/state` — in-memory session state (commander, system, dock, owned carriers).
 - `internal/reporter` — orchestrates journal events → API calls.
+- `internal/destinations` — one subpackage per place events are sent; `edcolonize` is the
+  inward push target and holds a wire contract mirrored from the edcolonize repo.
 - `internal/config` — load/save user settings.
 - `internal/web` — local HTTP server with an embedded browser UI.
+
+> **Destination order matters.** `reporter.Reporter` is what populates
+> `internal/state.Session`, and the multiplex dispatches in registration
+> order — so any destination that reads the session must be registered after
+> it. `edcolonize` is registered last for this reason.
 
 ### Design choices
 

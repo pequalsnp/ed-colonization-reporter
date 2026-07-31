@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 
@@ -84,6 +85,43 @@ type Config struct {
 	// own Inara dev relationship can set their registered app name here.
 	// Empty defaults to the shipped value.
 	InaraAppName string `toml:"inara_app_name"`
+
+	// EdcolonizeEnabled turns on pushing commander-state snapshots to a
+	// self-hosted edcolonize instance. Unlike every other destination this
+	// reports INWARD — to the player's own box, not a community service — so
+	// an AI companion can ground advice in current game state. Default off.
+	EdcolonizeEnabled bool `toml:"edcolonize_enabled"`
+	// EdcolonizeURL is the full snapshot endpoint, e.g.
+	// http://172.16.3.208:3000/api/cmdr/snapshot
+	EdcolonizeURL string `toml:"edcolonize_url"`
+	// EdcolonizeToken is the shared secret; must match the receiving
+	// instance's CMDR_INGEST_TOKEN.
+	EdcolonizeToken string `toml:"edcolonize_token"`
+}
+
+// Environment variables that override the edcolonize push settings. The
+// config file remains the primary mechanism — it's what the Settings GUI
+// writes, and it keeps this destination consistent with the others — but the
+// endpoint and token are deployment facts rather than user preferences, so
+// they can also come from the environment. An env var wins when set and
+// non-empty, and setting a URL is enough to enable the destination.
+const (
+	EnvEdcolonizeURL   = "EDCOLONIZE_URL"
+	EnvEdcolonizeToken = "EDCOLONIZE_TOKEN"
+)
+
+// applyEdcolonizeEnv overlays the environment onto a loaded config.
+func applyEdcolonizeEnv(cfg *Config) {
+	if v := strings.TrimSpace(os.Getenv(EnvEdcolonizeURL)); v != "" {
+		cfg.EdcolonizeURL = v
+		// Pointing the reporter at a URL is an unambiguous request to use it;
+		// requiring a second opt-in flag in a different place would be a
+		// papercut for a headless or scripted setup.
+		cfg.EdcolonizeEnabled = true
+	}
+	if v := strings.TrimSpace(os.Getenv(EnvEdcolonizeToken)); v != "" {
+		cfg.EdcolonizeToken = v
+	}
 }
 
 // Default returns a Config with the canonical defaults filled in. The defaults
@@ -113,6 +151,9 @@ func Load() (cfg Config, path string, existed bool, err error) {
 	cfg = Default()
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
+		// No config file is a legitimate headless setup: the edcolonize push
+		// target can be fully specified by environment alone.
+		applyEdcolonizeEnv(&cfg)
 		return cfg, path, false, nil
 	}
 	if err != nil {
@@ -125,6 +166,9 @@ func Load() (cfg Config, path string, existed bool, err error) {
 	if cfg.APIBaseURL == "" {
 		cfg.APIBaseURL = ravencolonial.DefaultBaseURL
 	}
+	// Environment overlays the file. Applied here rather than in LoadFrom so
+	// LoadFrom stays hermetic for tests.
+	applyEdcolonizeEnv(&cfg)
 	return cfg, path, true, nil
 }
 
