@@ -115,7 +115,7 @@ The [`PKGBUILD`](packaging/aur/PKGBUILD) builds from the release tarball.
 
 ### From source
 
-Requires Go 1.24+. The UI is built with [Fyne](https://fyne.io), which
+Requires Go 1.26+. The UI is built with [Fyne](https://fyne.io), which
 needs a C compiler and OpenGL/X11 dev headers on Linux. On Arch/CachyOS:
 
 ```
@@ -153,12 +153,18 @@ in Settings. Config is stored under your XDG config directory (Linux) or
 ## Development
 
 ```
-go test ./...           # all tests
-go vet ./...
+go test ./...                  # all tests
 go build ./...
+golangci-lint run ./...        # lint (standard set + modernize)
+golangci-lint run --fix ./...  # auto-fix what's mechanical
+golangci-lint fmt ./...        # apply gofmt
 ```
 
-The CI workflow runs the same on every push.
+The CI workflow runs the same on every push, and fails on any lint finding or
+gofmt diff. The tree is clean with **zero exclusions and zero `//nolint`
+directives** — please keep it that way rather than growing an ignore list. If a
+rule is genuinely wrong here, disable it in `.golangci.yml` with a comment
+saying why.
 
 ### Layout
 

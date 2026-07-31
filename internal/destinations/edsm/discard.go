@@ -18,8 +18,8 @@ const discardEndpoint = "https://www.edsm.net/api-journal-v1/discard"
 
 // discardSet tracks the events EDSM wants us to skip. Safe for concurrent use.
 type discardSet struct {
-	mu     sync.RWMutex
-	events map[string]bool
+	mu      sync.RWMutex
+	events  map[string]bool
 	fetched bool
 }
 
@@ -60,7 +60,7 @@ func (d *discardSet) RefreshFrom(ctx context.Context, hc *http.Client, url strin
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 		return fmt.Errorf("EDSM discard list: %s — %s", resp.Status, body)

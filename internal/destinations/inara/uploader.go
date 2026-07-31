@@ -206,10 +206,7 @@ func (u *Uploader) Flush(ctx context.Context) error {
 	// Take at most MaxEventsPerBatch from the head of the queue; leave the
 	// rest for the next tick. This drains large backlogs at one batch per
 	// flush interval, which is the rate Inara's docs recommend.
-	n := len(u.queue)
-	if n > MaxEventsPerBatch {
-		n = MaxEventsPerBatch
-	}
+	n := min(len(u.queue), MaxEventsPerBatch)
 	events := append([]Event(nil), u.queue[:n]...)
 	u.queue = append(u.queue[:0:0], u.queue[n:]...)
 	u.mu.Unlock()
@@ -245,14 +242,14 @@ func (u *Uploader) Flush(ctx context.Context) error {
 		u.requeueFront(events)
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 		// 5xx and timeouts get a retry; 4xx is our fault, drop the batch.
 		if resp.StatusCode >= 500 {
 			u.requeueFront(events)
 		}
-		return fmt.Errorf("Inara HTTP %s: %s", resp.Status, snippet)
+		return fmt.Errorf("upload to Inara failed: HTTP %s: %s", resp.Status, snippet)
 	}
 	var reply Reply
 	if err := json.NewDecoder(resp.Body).Decode(&reply); err != nil {
@@ -266,7 +263,7 @@ func (u *Uploader) Flush(ctx context.Context) error {
 		// user re-enables in Settings after fixing the key. EDMC does the
 		// same — quoth their inara.py: "API key invalid -> disable plugin".
 		u.SetEnabled(false)
-		err := fmt.Errorf("Inara batch rejected (%d): %s — uploads disabled, fix the API key in Settings to re-enable",
+		err := fmt.Errorf("batch rejected by Inara (%d): %s — uploads disabled, fix the API key in Settings to re-enable",
 			reply.Header.EventStatus, reply.Header.EventStatusText)
 		u.status("ERROR", err.Error())
 		return err

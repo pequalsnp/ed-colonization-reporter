@@ -42,9 +42,7 @@ func TestSnapshotDoesNotAliasTrackedState(t *testing.T) {
 	var wg sync.WaitGroup
 
 	// One goroutine keeps rewriting ranks / credits / materials...
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for i := range 300 {
 			_ = u.HandleEvent(ctx, raw(t, "Rank", map[string]any{
 				"Combat": i % 9, "Trade": i % 9, "Explore": i % 9,
@@ -60,16 +58,14 @@ func TestSnapshotDoesNotAliasTrackedState(t *testing.T) {
 				"Raw": []map[string]any{{"Name": "iron", "Count": i}},
 			}))
 		}
-	}()
+	})
 
 	// ...while another keeps forcing snapshots to be built and marshalled.
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for range 300 {
 			u.Flush()
 		}
-	}()
+	})
 
 	wg.Wait()
 }
@@ -93,9 +89,7 @@ func TestSnapshotDepotsSafeUnderConcurrentUpdates(t *testing.T) {
 	ctx := context.Background()
 	var wg sync.WaitGroup
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for i := range 200 {
 			_ = u.HandleEvent(ctx, raw(t, "ColonisationConstructionDepot", map[string]any{
 				"MarketID":             42,
@@ -108,15 +102,13 @@ func TestSnapshotDepotsSafeUnderConcurrentUpdates(t *testing.T) {
 				"MissionID": int64(i), "Name": "m",
 			}))
 		}
-	}()
+	})
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for range 200 {
 			u.Flush()
 		}
-	}()
+	})
 
 	wg.Wait()
 }

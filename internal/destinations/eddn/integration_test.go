@@ -64,13 +64,13 @@ func TestIntegration_FSDJump_AcceptedByBeta(t *testing.T) {
 	}
 
 	raw := mustRaw(t, journal.EventFSDJump, map[string]any{
-		"StarSystem":     "Sol",
-		"StarPos":        []any{0.0, 0.0, 0.0},
-		"SystemAddress":  10477373803,
-		"FuelLevel":      32.0,
-		"FuelUsed":       8.0,
-		"JumpDist":       14.3,
-		"Population":     22780871769,
+		"StarSystem":    "Sol",
+		"StarPos":       []any{0.0, 0.0, 0.0},
+		"SystemAddress": 10477373803,
+		"FuelLevel":     32.0,
+		"FuelUsed":      8.0,
+		"JumpDist":      14.3,
+		"Population":    22780871769,
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -106,8 +106,8 @@ func TestIntegration_Docked_AcceptedByBeta(t *testing.T) {
 		"StarSystem":    "Sol",
 		// Forbidden fields that our stripper must remove for the schema
 		// validator to accept the message.
-		"Wanted":        true,
-		"ActiveFine":    false,
+		"Wanted":     true,
+		"ActiveFine": false,
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)

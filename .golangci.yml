@@ -1,0 +1,25 @@
+# golangci-lint v2 config.
+#
+# Deliberately close to the defaults: the `standard` set (errcheck, govet,
+# ineffassign, staticcheck, unused) plus `modernize`, which rewrites older
+# idioms into current ones — range-over-int, min/max builtins, `any`,
+# strings.Builder — and is what keeps this codebase reading like current Go
+# rather than whatever was idiomatic when each file was written.
+#
+# No exclusions and no nolint directives today; the tree is clean. Please keep
+# it that way rather than growing an ignore list — if a rule is genuinely
+# wrong for this project, disable it here with a comment saying why.
+#
+#   golangci-lint run ./...        # check
+#   golangci-lint run --fix ./...  # auto-fix what's mechanical
+#   golangci-lint fmt ./...        # apply formatters
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    - modernize
+
+formatters:
+  enable:
+    - gofmt

@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/pequalsnp/ed-colonization-reporter/internal/destinations"
@@ -28,11 +29,11 @@ func TestSeedStateFromJournal_SeedsSessionState(t *testing.T) {
 		`{"timestamp":"2026-05-21T12:00:03Z","event":"FSDJump","StarSystem":"Sol"}`, // not state — must be ignored
 		`{"timestamp":"2026-05-21T12:00:04Z","event":"Loadout","Ship":"anaconda","ShipID":7,"ShipName":"Voyager","ShipIdent":"VY-1","Modules":[]}`,
 	}
-	var blob string
+	var blob strings.Builder
 	for _, l := range lines {
-		blob += l + "\n"
+		blob.WriteString(l + "\n")
 	}
-	if err := os.WriteFile(filepath.Join(dir, "Journal.001.log"), []byte(blob), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "Journal.001.log"), []byte(blob.String()), 0o644); err != nil {
 		t.Fatal(err)
 	}
 

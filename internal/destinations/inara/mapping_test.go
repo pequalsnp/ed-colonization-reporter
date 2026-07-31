@@ -170,11 +170,11 @@ func TestMapEvent_UnknownEventReturnsNil(t *testing.T) {
 
 func TestIsBetaOrLegacy(t *testing.T) {
 	cases := map[string]bool{
-		"4.0.0.1903":         false,
-		"4.0.0.beta1":        true,
-		"3.8.0-legacy":       true,
-		"":                   false,
-		"4.0.0 Live":         false,
+		"4.0.0.1903":   false,
+		"4.0.0.beta1":  true,
+		"3.8.0-legacy": true,
+		"":             false,
+		"4.0.0 Live":   false,
 	}
 	for in, want := range cases {
 		if got := isBetaOrLegacy(in); got != want {

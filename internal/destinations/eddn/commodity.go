@@ -39,14 +39,14 @@ func buildCommodityMessage(mf *journal.MarketFile, sess *state.Session) map[stri
 			continue
 		}
 		commodities = append(commodities, map[string]any{
-			"name":           stripCommodityWrapper(it.Name),
-			"meanPrice":      it.MeanPrice,
-			"buyPrice":       it.BuyPrice,
-			"stock":          it.Stock,
-			"stockBracket":   it.StockBracket,
-			"sellPrice":      it.SellPrice,
-			"demand":         it.Demand,
-			"demandBracket":  it.DemandBracket,
+			"name":          stripCommodityWrapper(it.Name),
+			"meanPrice":     it.MeanPrice,
+			"buyPrice":      it.BuyPrice,
+			"stock":         it.Stock,
+			"stockBracket":  it.StockBracket,
+			"sellPrice":     it.SellPrice,
+			"demand":        it.Demand,
+			"demandBracket": it.DemandBracket,
 		})
 	}
 	if len(commodities) == 0 {

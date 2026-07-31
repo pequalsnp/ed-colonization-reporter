@@ -70,7 +70,7 @@ func (t *Tailer) Run(ctx context.Context, out chan<- Raw) error {
 	var currentFile *os.File
 	defer func() {
 		if currentFile != nil {
-			currentFile.Close()
+			_ = currentFile.Close()
 		}
 	}()
 
@@ -118,7 +118,7 @@ func (t *Tailer) Run(ctx context.Context, out chan<- Raw) error {
 			return nil
 		}
 		if currentFile != nil {
-			currentFile.Close()
+			_ = currentFile.Close()
 			currentFile = nil
 		}
 		f, err := os.Open(latest)

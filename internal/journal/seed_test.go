@@ -3,6 +3,7 @@ package journal
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -21,11 +22,11 @@ func TestReadStateSeed_FiltersToStatePreamble(t *testing.T) {
 		`{"timestamp":"2026-05-21T12:00:07Z","event":"Cargo","Vessel":"Ship","Count":4}`,
 		`{"timestamp":"2026-05-21T12:00:08Z","event":"Docked","StationName":"Abe"}`,
 	}
-	var blob string
+	var blob strings.Builder
 	for _, l := range lines {
-		blob += l + "\n"
+		blob.WriteString(l + "\n")
 	}
-	if err := os.WriteFile(filepath.Join(dir, "Journal.001.log"), []byte(blob), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "Journal.001.log"), []byte(blob.String()), 0o644); err != nil {
 		t.Fatal(err)
 	}
 

@@ -164,7 +164,7 @@ func TestUploader_MaterialsLiveIncrementCoalesces(t *testing.T) {
 	_ = u.Flush(context.Background())
 
 	// A burst of live pickups + a craft, all before the next flush.
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		_ = u.HandleEvent(context.Background(), raw(t, journal.EventMaterialCollected, map[string]any{"Name": "iron", "Count": 1}))
 	}
 	_ = u.HandleEvent(context.Background(), raw(t, journal.EventEngineerCraft, map[string]any{

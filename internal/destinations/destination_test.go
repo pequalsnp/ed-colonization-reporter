@@ -180,7 +180,7 @@ func TestMultiplex_ConcurrentDispatchAndReplace(t *testing.T) {
 	var wg sync.WaitGroup
 	const N = 50
 	wg.Add(2 * N)
-	for i := 0; i < N; i++ {
+	for range N {
 		go func() {
 			defer wg.Done()
 			_ = m.HandleEvent(context.Background(), sampleRaw(t, "Tick"))

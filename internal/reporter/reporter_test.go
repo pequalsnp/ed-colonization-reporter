@@ -313,10 +313,8 @@ func TestHandleCommander_FetchesLinkedCarriers(t *testing.T) {
 		case <-time.After(20 * time.Millisecond):
 		}
 	}
-	for {
-		if sess.IsOwnedCarrier(42) && sess.IsOwnedCarrier(99) {
-			break
-		}
+	for !sess.IsOwnedCarrier(42) || !sess.IsOwnedCarrier(99) {
+
 		select {
 		case <-deadline:
 			t.Fatal("session never registered the linked carriers")
@@ -348,10 +346,8 @@ func TestHandleCommander_FetchesEvenOnReplay(t *testing.T) {
 		t.Fatalf("HandleEvent: %v", err)
 	}
 	deadline := time.After(2 * time.Second)
-	for {
-		if len(api.linkedCalls()) > 0 {
-			break
-		}
+	for len(api.linkedCalls()) <= 0 {
+
 		select {
 		case <-deadline:
 			t.Fatal("replayed Commander must trigger linked-carriers fetch")

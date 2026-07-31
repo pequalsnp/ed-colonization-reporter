@@ -2,6 +2,7 @@
 package state
 
 import (
+	"maps"
 	"sync"
 	"time"
 )
@@ -170,9 +171,7 @@ func (s *Session) ShipCargo() (map[string]int, time.Time) {
 		return nil, s.shipCargoAt
 	}
 	cp := make(map[string]int, len(s.shipCargo))
-	for k, v := range s.shipCargo {
-		cp[k] = v
-	}
+	maps.Copy(cp, s.shipCargo)
 	return cp, s.shipCargoAt
 }
 
@@ -203,9 +202,7 @@ func (s *Session) CurrentMarket() (station string, stock map[string]int, at time
 		return s.currentMarketStation, nil, s.currentMarketAt
 	}
 	cp := make(map[string]int, len(s.currentMarketStock))
-	for k, v := range s.currentMarketStock {
-		cp[k] = v
-	}
+	maps.Copy(cp, s.currentMarketStock)
 	return s.currentMarketStation, cp, s.currentMarketAt
 }
 
@@ -512,9 +509,7 @@ func (s *Session) FCCargo(marketID int64) (map[string]int, bool) {
 		return nil, false
 	}
 	cp := make(map[string]int, len(c))
-	for k, v := range c {
-		cp[k] = v
-	}
+	maps.Copy(cp, c)
 	return cp, true
 }
 

@@ -71,7 +71,7 @@ func TestRoot_ServesEmbeddedHTML(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get /: %v", err)
 	}
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 	if r.StatusCode != 200 {
 		t.Fatalf("status = %d", r.StatusCode)
 	}
@@ -91,7 +91,7 @@ func TestStatus_ReflectsSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 	var got map[string]any
 	_ = json.NewDecoder(r.Body).Decode(&got)
 	if got["commander"] != "Jameson" || got["starSystem"] != "Sol" || got["docked"] != true {
@@ -108,7 +108,7 @@ func TestStatus_RejectsPost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 	if r.StatusCode != http.StatusMethodNotAllowed {
 		t.Errorf("status = %d, want 405", r.StatusCode)
 	}
@@ -123,7 +123,7 @@ func TestConfig_GetReturnsCurrent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 	var got configDTO
 	if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
 		t.Fatal(err)
@@ -147,7 +147,7 @@ func TestConfig_PostUpdatesAndPersists(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 	if r.StatusCode != http.StatusNoContent {
 		t.Fatalf("status = %d", r.StatusCode)
 	}
@@ -160,7 +160,7 @@ func TestConfig_PostUpdatesAndPersists(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer r2.Body.Close()
+	defer func() { _ = r2.Body.Close() }()
 	var got configDTO
 	if err := json.NewDecoder(r2.Body).Decode(&got); err != nil {
 		t.Fatal(err)
@@ -180,7 +180,7 @@ func TestConfig_PostBadJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 	if r.StatusCode != http.StatusBadRequest {
 		t.Errorf("status = %d", r.StatusCode)
 	}
@@ -193,7 +193,7 @@ func TestConfig_PostFillsAPIBaseDefault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 	if s.cfg.APIBaseURL != ravencolonial.DefaultBaseURL {
 		t.Errorf("blank API base should default; got %q", s.cfg.APIBaseURL)
 	}
@@ -205,7 +205,7 @@ func TestProjects_NoCommanderReturnsEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 	body, _ := io.ReadAll(r.Body)
 	if !strings.Contains(string(body), `"projects":[]`) {
 		t.Errorf("expected empty projects array; got %s", string(body))
@@ -229,7 +229,7 @@ func TestProjects_ProxiesUpstream(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 	body, _ := io.ReadAll(r.Body)
 	if !strings.Contains(string(body), `"buildId":"b1"`) || !strings.Contains(string(body), `"commander":"Jameson"`) {
 		t.Errorf("got %s", string(body))
@@ -246,7 +246,7 @@ func TestEvents_StreamsStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get events: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/event-stream") {
 		t.Errorf("content-type = %q", ct)
@@ -293,7 +293,7 @@ func TestStatusHub_DropsSlowSubscribers(t *testing.T) {
 	// Fill far beyond the subscriber's buffer; should not block.
 	done := make(chan struct{})
 	go func() {
-		for i := 0; i < 10000; i++ {
+		for range 10000 {
 			hub.Publish(reporter.Status{Message: "x"})
 		}
 		close(done)
@@ -325,11 +325,4 @@ func TestStatusHub_ReplaysBacklog(t *testing.T) {
 	if got[0] != "before-1" || got[1] != "before-2" {
 		t.Errorf("backlog order wrong: %v", got)
 	}
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

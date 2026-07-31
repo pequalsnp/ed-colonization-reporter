@@ -195,16 +195,16 @@ func SaveTo(cfg Config, path string) error {
 	tmpName := tmp.Name()
 	enc := toml.NewEncoder(tmp)
 	if err := enc.Encode(cfg); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
 		return fmt.Errorf("encode toml: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
-		os.Remove(tmpName)
+		_ = os.Remove(tmpName)
 		return fmt.Errorf("close temp: %w", err)
 	}
 	if err := os.Rename(tmpName, path); err != nil {
-		os.Remove(tmpName)
+		_ = os.Remove(tmpName)
 		return fmt.Errorf("rename %s -> %s: %w", tmpName, path, err)
 	}
 	return nil

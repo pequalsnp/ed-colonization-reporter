@@ -148,11 +148,9 @@ func collectEvents(t *testing.T, tl *Tailer, n int, timeout time.Duration, durin
 		eventsM sync.Mutex
 	)
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		runErr = tl.Run(ctx, ch)
-	}()
+	})
 
 	collected := make(chan struct{})
 	go func() {
@@ -186,7 +184,7 @@ func appendFile(t *testing.T, path, s string) {
 	if err != nil {
 		t.Fatalf("open append: %v", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	if _, err := f.WriteString(s); err != nil {
 		t.Fatalf("append: %v", err)
 	}

@@ -89,7 +89,7 @@ func TestServer_StartListensAndServes(t *testing.T) {
 		t.Fatalf("GET /api/status: %v", err)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != 200 {
 		t.Errorf("status = %d", resp.StatusCode)
 	}

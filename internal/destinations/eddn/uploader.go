@@ -451,7 +451,7 @@ func (u *Uploader) send(ctx context.Context, schemaRef string, message map[strin
 		u.status("ERROR", "EDDN upload failed: "+err.Error())
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 		err := fmt.Errorf("EDDN %s: %s — %s", schemaRef, resp.Status, string(snippet))

@@ -3,6 +3,7 @@ package gui
 import (
 	"fmt"
 	"image/color"
+	"maps"
 	"strings"
 	"sync"
 	"time"
@@ -34,13 +35,13 @@ type activityPanel struct {
 	// can persist between launches.
 	prefs fyne.Preferences
 
-	list       *widget.List
-	chips      map[reporter.Level]*widget.Button
-	pauseBtn   *widget.Button
-	clearBtn   *widget.Button
-	exportBtn  *widget.Button
-	searchBox  *widget.Entry
-	countLbl   *canvas.Text
+	list      *widget.List
+	chips     map[reporter.Level]*widget.Button
+	pauseBtn  *widget.Button
+	clearBtn  *widget.Button
+	exportBtn *widget.Button
+	searchBox *widget.Entry
+	countLbl  *canvas.Text
 
 	// window is set by the App after construction so the Export dialog
 	// has a parent to anchor on.
@@ -113,7 +114,6 @@ func newActivityPanel() *activityPanel {
 
 	p.chips = map[reporter.Level]*widget.Button{}
 	for _, lvl := range []reporter.Level{reporter.LevelError, reporter.LevelWarn, reporter.LevelOK, reporter.LevelInfo} {
-		lvl := lvl
 		btn := widget.NewButton(lvl.String(), func() { p.toggleLevel(lvl) })
 		p.chips[lvl] = btn
 	}
@@ -242,7 +242,7 @@ func (p *activityPanel) export() {
 		if err != nil || w == nil {
 			return
 		}
-		defer w.Close()
+		defer func() { _ = w.Close() }()
 		var b strings.Builder
 		for _, s := range snapshot {
 			b.WriteString(formatStatus(s))
@@ -305,9 +305,7 @@ func (p *activityPanel) recomputeVisibleLocked() {
 func (p *activityPanel) applyChipStyles() {
 	p.mu.Lock()
 	state := make(map[reporter.Level]bool, len(p.levelEnabled))
-	for k, v := range p.levelEnabled {
-		state[k] = v
-	}
+	maps.Copy(state, p.levelEnabled)
 	p.mu.Unlock()
 	for lvl, btn := range p.chips {
 		if state[lvl] {
