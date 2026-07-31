@@ -43,34 +43,49 @@ not yet implemented.
   Requires an API key from [inara.cz/settings-api](https://inara.cz/settings-api/).
   Silently skips beta/legacy galaxies.
 
-**Self-hosted (opt-in, off by default)**
-- **edcolonize** — pushes a compact *commander-state snapshot* to your own
-  [edcolonize](https://github.com/pequalsnp/edcolonize) instance: where you
-  are, what you're flying, credits, cargo, engineering materials, active
-  missions, and the per-commodity state of construction sites you're
-  contributing to. Unlike every other destination this reports **inward**, to
-  your own box rather than a community service, so an AI companion can ground
-  its advice in your actual game state instead of asking you to recite it.
-
-  Snapshots are debounced (at most one POST every few seconds, no matter how
-  busy the journal gets) and **fail open**: if your box is rebooting or
-  unreachable the snapshot is dropped and everything else carries on
-  unaffected. Configure in Settings, or by environment:
-
-  ```
-  EDCOLONIZE_URL=http://<your-box>:3000/api/cmdr/snapshot
-  EDCOLONIZE_TOKEN=<same value as edcolonize's CMDR_INGEST_TOKEN>
-  ```
-
-  Setting `EDCOLONIZE_URL` enables the destination on its own; environment
-  values override the config file.
-
 **Convenience**
 - Optional **backfill** replays the current journal file from the start
   on launch so a mid-session restart re-reports anything the running
   game has already logged.
 - Local browser UI surfaces active projects, a live activity log, and a
   settings page with toggles + API-key fields for each destination.
+
+## Optional: feed your own tools
+
+Everything above works on its own. This section is for people who run
+something extra — you can ignore it entirely.
+
+### edcolonize (self-hosted)
+
+[edcolonize](https://github.com/pequalsnp/edcolonize) is a self-hosted tool
+that ranks Elite Dangerous systems as colonization candidates, and also
+exposes an **MCP server** so an AI assistant can query it directly. If you run
+one, the reporter can push it a compact *commander-state snapshot* — where you
+are, what you're flying, credits, cargo, engineering materials, active
+missions, and the per-commodity state of construction sites you're
+contributing to.
+
+That turns "what should I haul next?" from a question you have to answer into
+one the assistant can answer from fact: *you're two jumps out, and that site is
+still short 340t of steel.*
+
+Unlike every other destination this reports **inward** — to a server you run,
+on your own machine or LAN. Nothing is sent to a third party.
+
+Enable it in Settings, or by environment:
+
+```
+EDCOLONIZE_URL=http://<your-host>:3000/api/cmdr/snapshot
+EDCOLONIZE_TOKEN=<same value as that instance's CMDR_INGEST_TOKEN>
+```
+
+Setting `EDCOLONIZE_URL` is enough to turn it on; environment values override
+the config file.
+
+Snapshots are debounced (at most one POST every few seconds, however busy the
+journal gets) and **fail open** — if the box is rebooting or unreachable the
+snapshot is dropped and every other destination carries on unaffected. With no
+URL configured the integration opens no sockets and starts no goroutines.
 
 ## Install
 

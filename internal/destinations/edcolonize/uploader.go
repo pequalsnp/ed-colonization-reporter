@@ -47,12 +47,12 @@ type Config struct {
 //
 // # Failure policy
 //
-// This destination must never degrade the reporting Kyle actually depends on.
-// edcolonize is a self-hosted box that may be rebooting, mid-deploy, or
-// simply off; none of that is a reason to slow down or fail EDDN/EDSM/Inara.
-// So: HandleEvent never blocks on the network, POST failures are dropped
-// rather than retried, and errors are surfaced once per outage rather than
-// once per event.
+// This optional integration must never degrade the reporting users actually
+// depend on. A self-hosted edcolonize box may be rebooting, mid-deploy, or
+// simply off; none of that is a reason to slow down or fail
+// ravencolonial/EDDN/EDSM/Inara. So: HandleEvent never blocks on the network,
+// POST failures are dropped rather than retried, and errors are surfaced once
+// per outage rather than once per event.
 //
 // # Ordering dependency
 //

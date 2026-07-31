@@ -73,10 +73,19 @@ func (m *Multiplex) HandleEvent(ctx context.Context, raw journal.Raw) error {
 	dests := m.destinations
 	m.mu.RUnlock()
 	for _, d := range dests {
-		if err := d.HandleEvent(ctx, raw); err != nil {
-			if m.OnError != nil {
-				m.OnError(d.Name(), err)
-			}
+		err := d.HandleEvent(ctx, raw)
+		if err == nil {
+			continue
+		}
+		// A switched-off destination is not an error condition — the user
+		// asked for silence. Without this, every event fans out one OnError
+		// call per disabled destination; on a default install (all community
+		// uploads off) that is pure noise.
+		if errors.Is(err, ErrDisabled) {
+			continue
+		}
+		if m.OnError != nil {
+			m.OnError(d.Name(), err)
 		}
 	}
 	return nil

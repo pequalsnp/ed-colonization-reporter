@@ -405,11 +405,14 @@ func (s *Server) initSessionAndReporter() error {
 	s.inara.SetAPIKey(s.cfg.InaraAPIKey)
 	s.inara.SetEnabled(s.cfg.InaraEnabled)
 
-	// edcolonize pushes commander state INWARD to Kyle's self-hosted box so
-	// an AI companion can ground advice in live game state. Registered LAST
-	// on purpose: the multiplex dispatches in order and s.rep is what
-	// populates s.session, so anywhere earlier would snapshot the previous
-	// event's state.
+	// Optional: pushes commander state INWARD to a self-hosted edcolonize
+	// instance, so an AI assistant querying that instance's MCP server can
+	// ground its advice in live game state. Inert unless the user configures
+	// a URL, and nothing else here depends on it.
+	//
+	// Registered LAST on purpose: the multiplex dispatches in order and
+	// s.rep is what populates s.session, so anywhere earlier would snapshot
+	// the previous event's state.
 	s.edcolonize = edcolonize.New(
 		edcolonize.SoftwareID{Name: "edcolreport", Version: s.Version},
 		edcolonize.Config{
